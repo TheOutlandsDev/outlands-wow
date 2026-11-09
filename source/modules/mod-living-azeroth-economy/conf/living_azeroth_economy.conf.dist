@@ -1,0 +1,125 @@
+[worldserver]
+
+#
+# Living Azeroth AI4 economy gate.
+#
+# The source-side defaults are fail-closed. Only an ephemeral, separately
+# declared server-only gate configuration may enable the static seller.
+#
+
+LivingAzeroth.Economy.Enable = 0
+LivingAzeroth.Economy.StaticSeller.Enable = 0
+
+# One-shot, fail-closed backend identity provisioner. The runtime gate may
+# enable this only with the two exact locked names below. Its generated
+# password is never logged or stored as plaintext.
+LivingAzeroth.Economy.Provision.Enable = 0
+LivingAzeroth.Economy.Provision.AccountName = "EXAMPLEECONOMY"
+LivingAzeroth.Economy.Provision.CharacterName = "ExampleSeller"
+
+# Dedicated backend-only seller identity. Both values are mandatory when the
+# provisioner is disabled, and the character must belong to the account.
+# Both must remain zero while the provisioner is enabled.
+LivingAzeroth.Economy.StaticSeller.Account = 0
+LivingAzeroth.Economy.StaticSeller.GUID = 0
+
+# Locked AI4 values. Runtime fails closed if either value differs.
+# Supported deterministic tiers: 3000, 6000, 9000, and 11000.
+# The 11000 tier uses 9000 Alliance, 1000 Horde, and 1000 neutral listings,
+# with dense low-tier/profession coverage and 24h-47h45m staggered expiration.
+# MaxLiveListings must be at least ListingTier and may not exceed 12000.
+LivingAzeroth.Economy.StaticSeller.DurationHours = 48
+LivingAzeroth.Economy.StaticSeller.ListingTier = 3000
+LivingAzeroth.Economy.StaticSeller.MaxLiveListings = 6000
+LivingAzeroth.Economy.StaticSeller.CatalogSha256 = "5E15BE2C976EE436B1B4BF520154EE9B565007045FF02441C79ADDF8A6CDBC77"
+
+# Returned static auction items may be reclaimed only when their mail shape,
+# seller identity, locked catalog key, and reference counts all match exactly.
+# Relisting is requested by the native expiration hook and runs on the next
+# bounded auction update. Source defaults remain inert.
+LivingAzeroth.Economy.StaticSeller.ReclaimExpiredMail.Enable = 0
+LivingAzeroth.Economy.StaticSeller.ReclaimExpiredMail.MaxPerRun = 3000
+LivingAzeroth.Economy.StaticSeller.RelistOnExpire.Enable = 0
+
+# Persistent AI profile commerce v1. Source includes pure policy planners and
+# a bounded native transaction actuator. Every action remains disabled and
+# observe-only until its dedicated offline/server-only gates pass.
+LivingAzeroth.Economy.ProfileCommerce.Enable = 0
+LivingAzeroth.Economy.ProfileCommerce.ObserveOnly = 1
+LivingAzeroth.Economy.ProfileCommerce.Seller.Enable = 0
+LivingAzeroth.Economy.ProfileCommerce.Buyer.Enable = 0
+LivingAzeroth.Economy.ProfileCommerce.CycleSeconds = 60
+LivingAzeroth.Economy.ProfileCommerce.Rotation.Enable = 0
+LivingAzeroth.Economy.ProfileCommerce.Rotation.MaxBotsPerFaction = 0
+LivingAzeroth.Economy.ProfileCommerce.Rotation.Confirmation = ""
+
+# Human auctions remain protected. The first buyer gate may purchase only from
+# Living Azeroth-owned AI/system sellers.
+LivingAzeroth.Economy.ProfileCommerce.Buyer.AllowHumanAuctions = 0
+LivingAzeroth.Economy.ProfileCommerce.Buyer.HumanAuctionMutationConfirmation = ""
+
+# The system seller is a locked identity, not a free-form GUID allowlist.
+LivingAzeroth.Economy.ProfileCommerce.OwnedSystemSellerGuids = "900001"
+LivingAzeroth.Economy.ProfileCommerce.OwnedSystemSellerGuid = 900001
+LivingAzeroth.Economy.ProfileCommerce.OwnedSystemSellerName = "ExampleSeller"
+
+# Profile commerce fails closed unless this exact compiled catalog hash matches.
+LivingAzeroth.Economy.ProfileCommerce.RequireCatalogApproval = 1
+LivingAzeroth.Economy.ProfileCommerce.CatalogSha256 = "5E15BE2C976EE436B1B4BF520154EE9B565007045FF02441C79ADDF8A6CDBC77"
+
+# Normal-price policy, measured against a separately validated market/vendor
+# reference. Seller listings outside this band are rejected.
+LivingAzeroth.Economy.ProfileCommerce.Price.MinimumPercent = 80
+LivingAzeroth.Economy.ProfileCommerce.Price.MaximumPercent = 120
+LivingAzeroth.Economy.ProfileCommerce.Buyer.CeilingPercent = 110
+
+# Bounded profile and cycle limits.
+LivingAzeroth.Economy.ProfileCommerce.Seller.MaxListingsPerProfile = 3
+LivingAzeroth.Economy.ProfileCommerce.Seller.MaxActionsPerCycle = 1
+LivingAzeroth.Economy.ProfileCommerce.Seller.MaxMutationsPerBoot = 10
+LivingAzeroth.Economy.ProfileCommerce.Seller.AtomicReceipt.Enable = 0
+LivingAzeroth.Economy.ProfileCommerce.Seller.AtomicReceipt.Confirmation = ""
+LivingAzeroth.Economy.ProfileCommerce.Seller.EnvironmentId = ""
+LivingAzeroth.Economy.ProfileCommerce.Seller.RealmId = 0
+LivingAzeroth.Economy.ProfileCommerce.Seller.PolicyVersion = ""
+LivingAzeroth.Economy.ProfileCommerce.Buyer.MaxActionsPerCycle = 1
+LivingAzeroth.Economy.ProfileCommerce.Buyer.MaxPurchasesPerProfilePerDay = 2
+LivingAzeroth.Economy.ProfileCommerce.Buyer.MaxSpendCopperPerProfilePerDay = 20000
+LivingAzeroth.Economy.ProfileCommerce.Buyer.MinimumReserveCopper = 1000
+
+# Zero blocks every mutation while still allowing an explicitly declared
+# observe-only gate. A private transaction gate sets this to exactly one.
+LivingAzeroth.Economy.ProfileCommerce.MaxMutationsPerBoot = 0
+# Guild procurement v1 observes eligible human auctions and emits bounded
+# proposals. No purchase, bid, mail, inventory, gold, or guild-bank mutation
+# path exists in this implementation.
+LivingAzeroth.Economy.GuildProcurement.Enable = 0
+LivingAzeroth.Economy.GuildProcurement.ObserveOnly = 1
+LivingAzeroth.Economy.GuildProcurement.Confirmation = ""
+LivingAzeroth.Economy.GuildProcurement.CycleSeconds = 450
+LivingAzeroth.Economy.GuildProcurement.RequireCatalogApproval = 1
+LivingAzeroth.Economy.GuildProcurement.CeilingPercent = 110
+# Zero disables the hard count cap. The daily spend ceiling and timed cycle
+# remain authoritative throughput controls.
+LivingAzeroth.Economy.GuildProcurement.MaxPurchasesPerFactionPerDay = 0
+LivingAzeroth.Economy.GuildProcurement.MaxSpendCopperPerFactionPerDay = 600000
+LivingAzeroth.Economy.GuildProcurement.MaxPurchasesPerSellerPerDay = 0
+LivingAzeroth.Economy.GuildProcurement.MaxProposalsPerFactionPerCycle = 3
+LivingAzeroth.Economy.GuildProcurement.OwnedSystemSellerGuids = "900001"
+LivingAzeroth.Economy.GuildProcurement.AllowOwnedSystemSellerAuctions = 0
+LivingAzeroth.Economy.GuildProcurement.MaxOwnedSystemPurchasesPerFactionPerDay = 20
+# Guild procurement execution is a separate fail-closed mutation gate. Keep
+# disabled until isolated schema, buyer identity, settlement, and recovery gates pass.
+LivingAzeroth.Economy.GuildProcurement.Execution.Enable = 0
+LivingAzeroth.Economy.GuildProcurement.Execution.MutationMode = 0
+LivingAzeroth.Economy.GuildProcurement.Execution.Confirmation = ""
+LivingAzeroth.Economy.GuildProcurement.Execution.OwnedSystemConfirmation = ""
+LivingAzeroth.Economy.GuildProcurement.Execution.EnvironmentId = ""
+LivingAzeroth.Economy.GuildProcurement.Execution.RealmId = 0
+LivingAzeroth.Economy.GuildProcurement.Execution.PolicyVersion = ""
+LivingAzeroth.Economy.GuildProcurement.Execution.CatalogSha256 = "5E15BE2C976EE436B1B4BF520154EE9B565007045FF02441C79ADDF8A6CDBC77"
+LivingAzeroth.Economy.GuildProcurement.Execution.AllianceBuyerGuid = 0
+LivingAzeroth.Economy.GuildProcurement.Execution.HordeBuyerGuid = 0
+LivingAzeroth.Economy.GuildProcurement.Execution.MaxPurchasesPerFactionPerCycle = 3
+LivingAzeroth.Economy.GuildProcurement.Execution.MaxMutationsPerBoot = 2
+LivingAzeroth.Economy.GuildProcurement.Execution.MinimumBuyerReserveCopper = 1000
