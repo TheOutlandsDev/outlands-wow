@@ -1,6 +1,6 @@
 # Rebuild guide
 
-1. Fetch the exact revisions in [UPSTREAM-PINS.md](UPSTREAM-PINS.md) and apply the four reconstruction patches. The Ollama revision is a compatible reconstruction pin, not a proven original import revision. Verify each upstream license.
+1. Fetch the exact revisions in [UPSTREAM-PINS.md](UPSTREAM-PINS.md) and use the offline reconstruction helper or the documented manual patch sequence. The helper requires four local checkouts at their exact pins and writes only to a new directory. The Ollama revision is a compatible reconstruction pin, not a proven original import revision. Verify each upstream license.
 2. Add the three `mod-living-azeroth-*` directories under the fork's `modules/`. Review their config templates and SQL migrations. The example seller account, character and GUID are placeholders; create new identities only in an isolated test realm.
 3. Apply `patches/third-party-local-changes.patch` with `git apply -p2` after reconstructing the pinned upstream components. Retain upstream notices and assess the GPL/AGPL terms before combining modules.
 4. Inspect `deploy/` and `tools/` as examples. The original deployment controller has historical gate names and needs configuration for a new host, data source, image digests, backup, and network identity. Zero-filled digests and `example-*` values intentionally fail closed. Do not run lifecycle or restore commands against an existing service without a fresh review.
