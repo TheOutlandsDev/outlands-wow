@@ -1,0 +1,68 @@
+############################################################
+# LIVING AZEROTH: BATTLE FOR HILLSBRAD PROTOTYPE            #
+############################################################
+
+# Master switch. Disabled in every distributed release.
+War.Enable = 0
+
+# Start one bounded event after world startup.
+War.AutoStart = 0
+
+# Version 1 hard cap. The prototype requires exactly this many
+# registered random Playerbots from each faction.
+War.MaximumActivePerFaction = 10
+
+# The selected roster is deliberately normalized into a dedicated
+# Hillsbrad level-band roster. Back up the character database first.
+War.NormalizeLevel = 30
+
+# Lifecycle timing.
+War.RosterTimeoutSeconds = 300
+War.PreparationIntervalMs = 500
+War.StagingSeconds = 20
+War.CountdownSeconds = 10
+War.ObjectiveSeconds = 45
+War.ConclusionSeconds = 5
+War.AbortDisengageSeconds = 3
+War.CleanupReleaseIntervalMs = 250
+
+# Objective evaluation.
+War.CaptureRadius = 60.0
+
+# Safety thresholds.
+War.PerformanceAbortLatencyMs = 200
+War.PerformanceAbortSustainedSeconds = 30
+War.ExtremeUpdateSpikeMs = 500
+War.MaximumTeleportFailurePercent = 15.0
+
+# Prototype invariants.
+War.ReinforcementsEnable = 0
+War.RewardsEnable = 0
+
+# Append-only event evidence.
+War.HistoryPath = "/run/living-azeroth/logs/war/hillsbrad-history.jsonl"
+
+# Authoritative locations from acore_world.game_tele.
+War.Southshore.Map = 0
+War.Southshore.X = -853.221
+War.Southshore.Y = -533.529
+War.Southshore.Z = 9.98556
+War.Southshore.O = 0.242866
+
+War.TarrenMill.Map = 0
+War.TarrenMill.X = -34.1467
+War.TarrenMill.Y = -923.366
+War.TarrenMill.Z = 54.5576
+War.TarrenMill.O = 0.15019
+
+War.RoadCheckpoint.Map = 0
+War.RoadCheckpoint.X = -436.657
+War.RoadCheckpoint.Y = -581.254
+War.RoadCheckpoint.Z = 53.5944
+War.RoadCheckpoint.O = 1.25917
+
+War.SupplyPoint.Map = 0
+War.SupplyPoint.X = -510.344
+War.SupplyPoint.Y = 9.53799
+War.SupplyPoint.Z = 50.345
+War.SupplyPoint.O = 1.33728

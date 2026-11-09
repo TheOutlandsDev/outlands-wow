@@ -1,0 +1,65 @@
+# Living Azeroth AI-3 profile observer and decision ledger.
+#
+# AI-3 is observe-only. Enabling it permits writes only to its four la_*
+# Character database tables. It never enables or calls a population, bot,
+# auction, guild, party, quest, item, mail, money, or human-state actuator.
+#
+# Restart is required for every Director.* change. A runtime reload while AI-3
+# is active fails the director closed and stops further snapshots.
+
+Director.Enable = 0
+Director.ObserveOnly = 1
+Director.DecisionIntervalSeconds = 30
+
+# Low character GUID counter. Zero disables last-known reference persistence
+# and makes the no-human policy use the deterministic baseline.
+Director.Profile.PrimaryCharacterGuid = 0
+Director.Profile.AggregateAllHumans = 1
+Director.Profile.ExcludeGameMasters = 1
+
+# Strict comma-separated unsigned decimal values. Blank means none.
+Director.Profile.ExcludedAccountIds = ""
+Director.Profile.ExcludedCharacterGuids = ""
+
+Director.Offline.Mode = "LastKnownThenBaseline"
+Director.Offline.LastKnownMaxAgeHours = 168
+Director.Offline.BaselineLevel = 10
+Director.Offline.BaselineFactionMode = "Balanced"
+Director.Offline.BaselineMap = 0
+Director.Offline.BaselineZone = 12
+
+Director.Population.OfflineTarget = 50
+Director.Population.PerHuman = 10
+Director.Population.Maximum = 50
+Director.Population.LoginBatch = 2
+Director.Population.LogoutBatch = 1
+Director.Population.ChangeCooldownSeconds = 60
+Director.Population.LevelBelow = 3
+Director.Population.LevelAbove = 3
+Director.Population.PreserveCombatGroupQueue = 1
+Director.Population.VisibleReleaseRadius = 150
+
+Director.Activity.BackgroundPercent = 20
+Director.Party.Enable = 0
+Director.Party.HumanInitiatedOnly = 1
+Director.Guild.HumanEnrollment = "OptIn"
+
+Director.Economy.Enable = 0
+Director.Economy.ProfileAdaptive = 0
+Director.Economy.UpdateIntervalMinutes = 30
+Director.Economy.MaximumSyntheticListings = 75
+
+# Gate precondition: these actuator settings must exist in their owning
+# configuration files with the exact values below before Director.Enable=1.
+# The director reads and hashes them; any unsafe value fails startup closed.
+#
+# Population.Enable = 0
+# Population.PersistentProfiles = 0
+# Population.SharedGuild.Enable = 0
+# War.Enable = 0
+# AiPlayerbot.Enabled = 0
+# AiPlayerbot.RandomBotAutologin = 0
+# AuctionHouseBot.EnableSeller = 0
+# AuctionHouseBot.EnableBuyer = 0
+
+

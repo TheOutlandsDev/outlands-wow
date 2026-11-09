@@ -1,0 +1,160 @@
+##############################################
+# Living Azeroth ambient population prototype
+##############################################
+
+# Master switch. Disabled by default in installed releases.
+Population.Enable = 0
+Population.AutoStart = 0
+
+# Restore assigned bot positions and native strategies during graceful shutdown.
+# Level normalization is intentionally not reversed; the pre-gate database
+# checkpoint is the exact rollback for generated inventory and character state.
+Population.RestoreOnShutdown = 1
+
+# Exact independent random-Playerbot roster per faction.
+# The isolated capacity candidate allows at most 32 per faction. Public
+# activation remains at 30 until a private 60-bot recovery gate passes.
+Population.TargetPerFaction = 10
+# Exact roster slots per faction assigned to the first four, capital-city
+# anchors. The remainder uses the four starter/travel anchors. A value larger
+# than TargetPerFaction is clamped to TargetPerFaction.
+Population.CapitalSlotsPerFaction = 0
+# This range seeds new profiles. Persistent profiles may progress above it.
+Population.MinLevel = 5
+Population.MaxLevel = 12
+
+Population.RosterTimeoutSeconds = 300
+Population.AssignmentIntervalMs = 500
+Population.VerifyIntervalSeconds = 30
+Population.AssignmentHoldSeconds = 7200
+Population.HistoryPath = "/run/living-azeroth/logs/population/ambient-history.jsonl"
+
+# Initialize each selected RNDBOT profile only once, then preserve earned
+# levels, equipment, talents, quests, inventory, and guild membership.
+Population.PersistentProfiles = 0
+
+# Optional cross-faction shared guild and activity evidence.
+Population.SharedGuild.Enable = 0
+Population.SharedGuild.Name = "Living Azeroth"
+Population.SharedGuild.PlayerName = "Shamus"
+Population.SharedGuild.CheckIntervalSeconds = 5
+Population.ActivityTelemetryIntervalSeconds = 30
+Population.ProfileHistoryPath = "/run/living-azeroth/logs/population/profile-history.jsonl"
+
+# Alliance capital anchors. Verified native auctioneer positions from the
+# pinned world database; dormant while CapitalSlotsPerFaction=0.
+Population.Alliance.Anchor1.Map = 0
+Population.Alliance.Anchor1.Zone = 1519
+Population.Alliance.Anchor1.X = -8821.53
+Population.Alliance.Anchor1.Y = 659.886
+Population.Alliance.Anchor1.Z = 97.4645
+Population.Alliance.Anchor1.O = 0.401426
+
+Population.Alliance.Anchor2.Map = 0
+Population.Alliance.Anchor2.Zone = 1519
+Population.Alliance.Anchor2.X = -8814.55
+Population.Alliance.Anchor2.Y = 660.315
+Population.Alliance.Anchor2.Z = 96.6818
+Population.Alliance.Anchor2.O = 1.72788
+
+Population.Alliance.Anchor3.Map = 0
+Population.Alliance.Anchor3.Zone = 1537
+Population.Alliance.Anchor3.X = -4948.01
+Population.Alliance.Anchor3.Y = -901.528
+Population.Alliance.Anchor3.Z = 505.172
+Population.Alliance.Anchor3.O = 3.80482
+
+Population.Alliance.Anchor4.Map = 0
+Population.Alliance.Anchor4.Zone = 1537
+Population.Alliance.Anchor4.X = -4967.86
+Population.Alliance.Anchor4.Y = -917.619
+Population.Alliance.Anchor4.Z = 505.169
+Population.Alliance.Anchor4.O = 0.785398
+
+# Alliance starter/travel anchors.
+Population.Alliance.Anchor5.Map = 0
+Population.Alliance.Anchor5.Zone = 12
+Population.Alliance.Anchor5.X = -8914.7
+Population.Alliance.Anchor5.Y = -133.6
+Population.Alliance.Anchor5.Z = 80.6
+Population.Alliance.Anchor5.O = 1.95
+
+Population.Alliance.Anchor6.Map = 0
+Population.Alliance.Anchor6.Zone = 12
+Population.Alliance.Anchor6.X = -9465.5
+Population.Alliance.Anchor6.Y = 74.0
+Population.Alliance.Anchor6.Z = 56.8
+Population.Alliance.Anchor6.O = 4.59
+
+Population.Alliance.Anchor7.Map = 0
+Population.Alliance.Anchor7.Zone = 12
+Population.Alliance.Anchor7.X = -9469.8
+Population.Alliance.Anchor7.Y = -1289.2
+Population.Alliance.Anchor7.Z = 41.2
+Population.Alliance.Anchor7.O = 3.25
+
+Population.Alliance.Anchor8.Map = 0
+Population.Alliance.Anchor8.Zone = 12
+Population.Alliance.Anchor8.X = -9610.2
+Population.Alliance.Anchor8.Y = -1032.1
+Population.Alliance.Anchor8.Z = 41.3
+Population.Alliance.Anchor8.O = 3.14
+
+# Horde capital anchors. Verified native auctioneer positions from the pinned
+# world database; dormant while CapitalSlotsPerFaction=0.
+Population.Horde.Anchor1.Map = 1
+Population.Horde.Anchor1.Zone = 1637
+Population.Horde.Anchor1.X = 1667.62
+Population.Horde.Anchor1.Y = -4463.76
+Population.Horde.Anchor1.Z = 20.3911
+Population.Horde.Anchor1.O = 1.71042
+
+Population.Horde.Anchor2.Map = 1
+Population.Horde.Anchor2.Zone = 1637
+Population.Horde.Anchor2.X = 1695.92
+Population.Horde.Anchor2.Y = -4455.55
+Population.Horde.Anchor2.Z = 20.3911
+Population.Horde.Anchor2.O = 2.00713
+
+Population.Horde.Anchor3.Map = 0
+Population.Horde.Anchor3.Zone = 1497
+Population.Horde.Anchor3.X = 1542.45
+Population.Horde.Anchor3.Y = 255.202
+Population.Horde.Anchor3.Z = -56.7948
+Population.Horde.Anchor3.O = 1.01229
+
+Population.Horde.Anchor4.Map = 0
+Population.Horde.Anchor4.Zone = 1497
+Population.Horde.Anchor4.X = 1542.4
+Population.Horde.Anchor4.Y = 225.162
+Population.Horde.Anchor4.Z = -56.7902
+Population.Horde.Anchor4.O = 5.23599
+
+# Horde starter/travel anchors.
+Population.Horde.Anchor5.Map = 1
+Population.Horde.Anchor5.Zone = 14
+Population.Horde.Anchor5.X = -629.1
+Population.Horde.Anchor5.Y = -4228.1
+Population.Horde.Anchor5.Z = 38.2
+Population.Horde.Anchor5.O = 5.01
+
+Population.Horde.Anchor6.Map = 1
+Population.Horde.Anchor6.Zone = 14
+Population.Horde.Anchor6.X = 340.4
+Population.Horde.Anchor6.Y = -4686.3
+Population.Horde.Anchor6.Z = 16.5
+Population.Horde.Anchor6.O = 4.19
+
+Population.Horde.Anchor7.Map = 1
+Population.Horde.Anchor7.Zone = 14
+Population.Horde.Anchor7.X = -825.6
+Population.Horde.Anchor7.Y = -4920.8
+Population.Horde.Anchor7.Z = 19.7
+Population.Horde.Anchor7.O = 0.26
+
+Population.Horde.Anchor8.Map = 1
+Population.Horde.Anchor8.Zone = 14
+Population.Horde.Anchor8.X = 1102.1
+Population.Horde.Anchor8.Y = -4945.4
+Population.Horde.Anchor8.Z = 15.7
+Population.Horde.Anchor8.O = 2.36
