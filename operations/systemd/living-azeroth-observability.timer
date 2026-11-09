@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh sanitized Living Azeroth metrics every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=living-azeroth-observability.service
+
+[Install]
+WantedBy=timers.target

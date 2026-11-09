@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Living Azeroth validated logical backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=5min
+AccuracySec=1min
+Persistent=true
+Unit=living-azeroth-backup.service
+
+[Install]
+WantedBy=timers.target

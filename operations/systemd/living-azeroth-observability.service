@@ -1,0 +1,33 @@
+[Unit]
+Description=Collect sanitized Living Azeroth metrics for Prometheus
+After=docker.service tailscaled.service
+Wants=docker.service tailscaled.service
+ConditionPathExists=/opt/outlands-wow/tools/living_azeroth_observability.py
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+WorkingDirectory=/opt/outlands-wow
+ExecStart=/opt/outlands-wow/.venv/bin/python3 tools/living_azeroth_observability.py
+TimeoutStartSec=45s
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=10%
+MemoryMax=128M
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=read-only
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/backups/outlands-wow /var/run/docker.sock
+ReadWritePaths=/var/lib/node_exporter/textfile_collector /opt/outlands-wow/run
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

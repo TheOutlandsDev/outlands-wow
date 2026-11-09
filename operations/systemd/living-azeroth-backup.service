@@ -1,0 +1,29 @@
+[Unit]
+Description=Living Azeroth validated logical backup and bounded retention
+After=living-azeroth.service docker.service
+RequiresMountsFor=/var/backups
+ConditionPathExists=/opt/outlands-wow/run/private/gate6/runtime-state.json
+ConditionPathIsMountPoint=/var/backups
+
+[Service]
+Type=oneshot
+User=wowserver
+Group=wowserver
+SupplementaryGroups=docker
+UMask=0077
+WorkingDirectory=/opt/outlands-wow
+ExecStart=/opt/outlands-wow/.venv/bin/python3 tools/gate3_server_controller.py backup --retention-count 14
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/outlands-wow/run /var/backups/outlands-wow
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
