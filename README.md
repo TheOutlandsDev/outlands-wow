@@ -2,7 +2,7 @@
 
 A source and operations kit for rebuilding the Living Azeroth World of Warcraft 3.3.5a server when its owner chooses to bring it online again. This repository contains custom gameplay modules, SQL schema changes, deployment and lifecycle scripts, observability definitions, a player launcher, and a patch recording local changes to third-party code.
 
-The original running server, its data, and its access configuration are not included. This kit is a source snapshot for future engineering. It is not an installable, tested release. The examples were scrubbed of live host paths, network addresses, account names, runtime fingerprints, and backup identifiers. Rebuild and validate every gate on an isolated machine before opening any game port.
+The original running server, its data, and its access configuration are not included. This kit is a source snapshot for future engineering, not an installable release. A bounded synthetic database build, server startup, and logical restore passed on one isolated host; client login, gameplay, enabled AI, and active economy remain untested. The examples were scrubbed of live host paths, network addresses, account names, runtime fingerprints, and backup identifiers. Rebuild and validate every gate on an isolated machine before opening any game port.
 
 ## Downloadable snapshot
 
@@ -11,7 +11,7 @@ The same reviewed source is also available as [a ZIP snapshot](outlands-wow-sour
 ## Contents
 
 - `source/modules/mod-living-azeroth-*`: economy, guild, war, and population customizations, config templates, SQL migrations, and offline tests.
-- `tools/`: lifecycle controller, backup and restore methods, service supervision, observability, validation tools, and tests.
+- `tools/`: lifecycle controller, backup and restore methods, synthetic server startup and restore rehearsals, service supervision, observability, validation tools, and tests.
 - `deploy/`: Linux build/runtime Dockerfiles and entrypoints.
 - `operations/`: example systemd and monitoring definitions.
 - `client/wow-launcher/`: Tailscale-aware Windows player launcher example.
