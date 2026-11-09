@@ -1,0 +1,149 @@
+groups:
+  - name: living-azeroth-health
+    rules:
+      - alert: LivingAzerothMetricsMissing
+        expr: absent(living_azeroth_metrics_collection_success)
+        for: 3m
+        labels:
+          severity: critical
+          category: game-server
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth telemetry is missing"
+          description: "The bounded backend collector has produced no Prometheus series for three minutes."
+          containment: "Treat runtime health as unknown; inspect the collector journal before changing the game runtime."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothMetricsStale
+        expr: time() - living_azeroth_metrics_last_scrape_timestamp_seconds > 180
+        for: 2m
+        labels:
+          severity: critical
+          category: game-server
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth telemetry is stale"
+          description: "The last successful bounded collection is more than three minutes old."
+          containment: "Distinguish a serialized backup from collector failure before intervening."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothRuntimeUnhealthy
+        expr: |
+          (living_azeroth_desired_online == 1)
+          and on()
+          (living_azeroth_runtime_healthy == 0)
+        for: 3m
+        labels:
+          severity: critical
+          category: game-server
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth runtime is not healthy"
+          description: "One or more controller-owned database, authentication, world, or transport checks are failing."
+          containment: "Keep player access closed and use only the Python lifecycle controller for recovery."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothDesiredStateMissing
+        expr: absent(living_azeroth_development_offline) or absent(living_azeroth_desired_online)
+        for: 3m
+        labels:
+          severity: critical
+          category: game-server
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth desired-state telemetry is missing"
+          description: "Runtime health cannot be interpreted safely without the development-offline contract."
+          containment: "Keep player access unchanged and repair telemetry before changing lifecycle state."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothDevelopmentOfflineBoundaryFailed
+        expr: |
+          (living_azeroth_development_offline == 1)
+          and on()
+          (
+            (living_azeroth_managed_runtime == 1)
+            or on() (sum(living_azeroth_container_running) > 0)
+            or on() (living_azeroth_player_access_enabled == 1)
+          )
+        for: 3m
+        labels:
+          severity: critical
+          category: game-server
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth is running despite development-offline mode"
+          description: "The offline marker is active, but runtime state, a required container, or player access is still present."
+          containment: "Keep exposure closed and use only the controller-owned stop path."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothSecurityBoundaryFailed
+        expr: living_azeroth_security_boundary_ok == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: security
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth exposure boundary failed"
+          description: "Docker host publishing, MySQL exposure, Funnel, or Tailscale routing differs from the approved boundary."
+          containment: "Close player access immediately and preserve controller evidence."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothBackupBaselineMissing
+        expr: living_azeroth_backup_successful_count == 0
+        for: 15m
+        labels:
+          severity: warning
+          category: backup
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth has no validated backup baseline"
+          description: "No successful retained logical-backup manifest is available, including during planned offline development."
+          containment: "Create and restore-validate a controller-owned logical backup before promotion."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothBackupStale
+        expr: |
+          (living_azeroth_backup_required == 1)
+          and on()
+          (
+            (living_azeroth_backup_latest_created_timestamp_seconds == 0)
+            or on()
+            (time() - living_azeroth_backup_latest_created_timestamp_seconds > 108000)
+          )
+        for: 15m
+        labels:
+          severity: warning
+          category: backup
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth logical backup is stale while runtime changes are possible"
+          description: "Online operation is desired, but no successful logical backup exists from the last thirty hours."
+          containment: "Run the controller-owned backup and restore exercise without enabling additional exposure."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothBoundedBotsMissing
+        expr: living_azeroth_playerbot_profile_enabled == 1 and on() living_azeroth_database_metric{metric="online_characters"} < 10
+        for: 5m
+        labels:
+          severity: warning
+          category: game-ai
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth bounded bot population is below target"
+          description: "A bounded playerbot profile is active, but fewer than ten total characters are online."
+          containment: "Keep the profile bounded; inspect worldserver AI markers before restarting."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
+
+      - alert: LivingAzerothOllamaBackendUnhealthy
+        expr: living_azeroth_ollama_required == 1 and on() living_azeroth_ollama_backend_healthy == 0
+        for: 2m
+        labels:
+          severity: warning
+          category: game-ai
+          owner: living-azeroth-ops
+        annotations:
+          summary: "Living Azeroth private dialogue backend is unhealthy"
+          description: "The active dialogue profile requires Ollama, but its model, loopback binding, or private internal bridge failed validation."
+          containment: "Gameplay remains on Playerbots; disable only the Ollama dialogue profile through the Python controller if failures persist."
+          dashboard_url: "/d/living-azeroth-operations/living-azeroth-operations"
