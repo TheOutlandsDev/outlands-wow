@@ -137,6 +137,12 @@ public:
     {
         _elapsedMs = 0;
         _ownedAiAccounts.clear();
+        if (!_config.Policy.Enabled)
+        {
+            _runtimeBlocked = true;
+            LOG_INFO("living_azeroth.economy", "Guild procurement observer disabled.");
+            return;
+        }
         QueryResult result = PlayerbotsDatabase.Query(
             "SELECT account_id FROM playerbots_account_type WHERE account_type IN (1,2) ORDER BY account_id");
         if (result)

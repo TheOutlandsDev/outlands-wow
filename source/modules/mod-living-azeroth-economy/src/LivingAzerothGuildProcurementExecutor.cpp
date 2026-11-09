@@ -322,6 +322,13 @@ public:
         _claimedAuctionIds.clear();
         _schemaReady = false;
         _catalogHashReady = false;
+        _priceIndexReady = false;
+        if (!_config.ExecutePolicy.Enabled)
+        {
+            _runtimeBlocked = true;
+            LOG_INFO("living_azeroth.economy", "Guild procurement executor disabled.");
+            return;
+        }
         _priceIndexReady = LivingAzeroth::Economy::FullPriceIndex::Instance().EnsureLoaded();
         LoadOwnedAiAccounts();
         LoadSchemaIdentity();
