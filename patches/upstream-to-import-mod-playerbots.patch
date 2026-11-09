@@ -1,0 +1,2708 @@
+diff --git a/conf/playerbots.conf.dist b/conf/playerbots.conf.dist
+index 9befb8a..0143236 100644
+--- a/conf/playerbots.conf.dist
++++ b/conf/playerbots.conf.dist
+@@ -109,6 +109,11 @@ AiPlayerbot.RandomBotAccountPrefix = "rndbot"
+ # like to recreate randombots, set the number back to 0 and rerun the Worldserver.
+ AiPlayerbot.DeleteRandomBotAccounts = 0
+ 
++# Character GUIDs that must be included in the random-bot roster after each
++# startup reset. Each character must belong to a different RNDbot account.
++# Default: empty
++AiPlayerbot.PinnedRandomBotGuids = ""
++
+ # Disable randombots when no real players are logged in
+ # Default: 0 (randombots will login when server starts)
+ # If enabled, randombots will only log in 30 seconds (default) after a real player logs in, and will
+@@ -962,6 +967,36 @@ AiPlayerbot.botActiveAloneSmartScaleDiffLimitCeiling = 200
+ AiPlayerbot.botActiveAloneSmartScaleWhenMinLevel = 1
+ AiPlayerbot.botActiveAloneSmartScaleWhenMaxLevel = 80
+ 
++# Player-local ambient population. This controller runs only on the world
++# thread and never moves combat, dead, grouped, LFG, dungeon, raid, BG,
++# teleporting, rooted, transport, visible, or cooling-down bots. It preserves
++# the fixed online bot count while keeping a small level-matched population in
++# the active player's outdoor zone. Promotions never lower a bot's level.
++AiPlayerbot.PlayerLocalPopulation.Enable = 0
++AiPlayerbot.PlayerLocalPopulation.MinimumPerPlayer = 6
++AiPlayerbot.PlayerLocalPopulation.TargetPerPlayer = 8
++AiPlayerbot.PlayerLocalPopulation.MaximumPerPlayer = 10
++AiPlayerbot.PlayerLocalPopulation.PreferredLevelDelta = 3
++AiPlayerbot.PlayerLocalPopulation.MaximumLevelDelta = 5
++AiPlayerbot.PlayerLocalPopulation.CheckIntervalSeconds = 30
++AiPlayerbot.PlayerLocalPopulation.MaxRelocationsPerCycle = 2
++AiPlayerbot.PlayerLocalPopulation.RelocationCooldownSeconds = 600
++AiPlayerbot.PlayerLocalPopulation.MinimumArrivalDistance = 200
++AiPlayerbot.PlayerLocalPopulation.MaximumArrivalDistance = 800
++AiPlayerbot.PlayerLocalPopulation.SafeArrivalAttempts = 12
++
++# LA24: keep a bounded percentage of the fixed online bot population in
++# deterministic level windows anchored to active players. The world-thread pass
++# never touches visible, grouped, queued, instanced, fighting, transported,
++# teleporting, rooted, or cooldown-protected bots.
++AiPlayerbot.AdaptiveLevelCohort.Enable = 0
++AiPlayerbot.AdaptiveLevelCohort.TargetPercent = 80
++AiPlayerbot.AdaptiveLevelCohort.WindowLevels = 25
++AiPlayerbot.AdaptiveLevelCohort.LowerSlack = 4
++AiPlayerbot.AdaptiveLevelCohort.CheckIntervalSeconds = 300
++AiPlayerbot.AdaptiveLevelCohort.MaxChangesPerCycle = 2
++AiPlayerbot.AdaptiveLevelCohort.ChangeCooldownSeconds = 1800
++
+ #
+ #
+ ####################################################################################################
+@@ -2226,6 +2261,33 @@ AiPlayerbot.GuildRepliesRate = 100
+ # Bots without a master will say their lines
+ AiPlayerbot.RandomBotSayWithoutMaster = 0
+ 
++# Living Azeroth Chat v2. Disabled by default until its backend, recovery,
++# client, and soak gates are accepted. The v2 path adds stable persona-aware
++# response variation, identity/level intent handling, live guild naming, and
++# safer speaker/trade wording. It remains bounded and local and makes no
++# database, filesystem, HTTP, or external-model call from the world update path.
++AiPlayerbot.LivingAzerothChat.Enable = 0
++
++# Reply to the custom World channel. Keep disabled for the first runtime gate.
++AiPlayerbot.LivingAzerothChat.ReplyToWorld = 0
++
++# Reply probability (0-100) for a named/whispered bot, an unaddressed real
++# player message, and another free bot. The safe first-runtime posture is
++# addressed/whisper-only; ambient human and bot chatter require a later gate.
++# A shared claim prevents multiple replies when unaddressed chat is enabled.
++AiPlayerbot.LivingAzerothChat.AddressedChance = 100
++AiPlayerbot.LivingAzerothChat.UnaddressedChance = 0
++AiPlayerbot.LivingAzerothChat.BotChance = 0
++
++# Humanized delay and per-bot reply cooldown, in seconds.
++AiPlayerbot.LivingAzerothChat.DelayMinSeconds = 3
++AiPlayerbot.LivingAzerothChat.DelayMaxSeconds = 8
++AiPlayerbot.LivingAzerothChat.CooldownMinSeconds = 15
++AiPlayerbot.LivingAzerothChat.CooldownMaxSeconds = 45
++
++# Seconds for the shared one-responder claim on an unaddressed message.
++AiPlayerbot.LivingAzerothChat.ClaimTtlSeconds = 5
++
+ #
+ #
+ ####################################################################################################
+diff --git a/src/Ai/Base/Actions/LfgActions.cpp b/src/Ai/Base/Actions/LfgActions.cpp
+index fd2fe10..6bb740c 100644
+--- a/src/Ai/Base/Actions/LfgActions.cpp
++++ b/src/Ai/Base/Actions/LfgActions.cpp
+@@ -7,7 +7,9 @@
+ #include "LfgActions.h"
+ 
+ #include "AiFactory.h"
++#include "GameTime.h"
+ #include "ItemVisitors.h"
++#include "LfgLifecycleGuard.h"
+ #include "LFGMgr.h"
+ #include "Opcodes.h"
+ #include "Playerbots.h"
+@@ -171,23 +173,67 @@ bool LfgJoinAction::JoinLFG()
+     return true;
+ }
+ 
+-bool LfgRoleCheckAction::Execute(Event /*event*/)
++bool LfgRoleCheckAction::Execute(Event event)
+ {
+     if (Group* group = bot->GetGroup())
+     {
+         uint32 newRoles = GetRoles();
+-        // if (currentRoles == newRoles)
+-        //     return false;
++        WorldPacket p(event.getPacket());
++        bool packetValid = !p.empty();
++        uint32 state = LFG_ROLECHECK_DEFAULT;
++        bool initializing = false;
++        bool selfFound = false;
++        bool selfReady = false;
++        uint32 currentRoles = PLAYER_ROLE_NONE;
++
++        if (packetValid)
++        {
++            p.rpos(0);
++            uint8 initializingByte = 0;
++            uint8 dungeonCount = 0;
++            p >> state >> initializingByte >> dungeonCount;
++            initializing = state == LFG_ROLECHECK_INITIALITING && initializingByte != 0;
++
++            for (uint8 i = 0; i < dungeonCount; ++i)
++            {
++                uint32 dungeonEntry = 0;
++                p >> dungeonEntry;
++            }
++
++            uint8 playerCount = 0;
++            p >> playerCount;
++            for (uint8 i = 0; i < playerCount; ++i)
++            {
++                ObjectGuid memberGuid;
++                uint8 ready = 0;
++                uint32 roles = PLAYER_ROLE_NONE;
++                uint8 level = 0;
++                p >> memberGuid >> ready >> roles >> level;
++                if (memberGuid == bot->GetGUID())
++                {
++                    selfFound = true;
++                    selfReady = ready != 0;
++                    currentRoles = roles;
++                }
++            }
++        }
++
++        PlayerbotLfgLifecycle::RoleSubmissionDecision decision =
++            PlayerbotLfgLifecycle::EvaluateRoleSubmission(packetValid, initializing, selfFound, selfReady,
++                                                           currentRoles, newRoles);
++        LOG_INFO("playerbots",
++                 "Living Azeroth LFG role-check decision={} bot={} group={} state={} ready={} currentRoles={} "
++                 "desiredRoles={}",
++                 PlayerbotLfgLifecycle::ToString(decision), bot->GetGUID().GetCounter(),
++                 group->GetGUID().GetCounter(), state, selfReady, currentRoles, newRoles);
++
++        if (decision != PlayerbotLfgLifecycle::RoleSubmissionDecision::Submit)
++            return decision == PlayerbotLfgLifecycle::RoleSubmissionDecision::SuppressAlreadyReady ||
++                   decision == PlayerbotLfgLifecycle::RoleSubmissionDecision::SuppressTerminalState;
+ 
+         WorldPacket* packet = new WorldPacket(CMSG_LFG_SET_ROLES);
+         *packet << (uint8)newRoles;
+         bot->GetSession()->QueuePacket(packet);
+-        // sLFGMgr->SetRoles(bot->GetGUID(), newRoles);
+-        // sLFGMgr->UpdateRoleCheck(group->GetGUID(), bot->GetGUID(), newRoles);
+-
+-        LOG_INFO("playerbots", "Bot {} {}:{} <{}>: LFG roles checked", bot->GetGUID().ToString().c_str(),
+-                 bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str());
+-
+         return true;
+     }
+ 
+@@ -203,6 +249,8 @@ bool LfgAcceptAction::Execute(Event event)
+     {
+         if (bot->IsInCombat() || bot->isDead())
+         {
++            LOG_INFO("playerbots", "Living Azeroth LFG proposal decision=decline_busy bot={} proposal={}",
++                     bot->GetGUID().GetCounter(), id);
+             WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+             *packet << id << false;
+             bot->GetSession()->QueuePacket(packet);
+@@ -215,6 +263,8 @@ bool LfgAcceptAction::Execute(Event event)
+         WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+         *packet << id << true;
+         bot->GetSession()->QueuePacket(packet);
++        LOG_INFO("playerbots", "Living Azeroth LFG proposal decision=accept bot={} proposal={}",
++                 bot->GetGUID().GetCounter(), id);
+ 
+         if (RandomPlayerbotMgr::instance().IsRandomBot(bot) && !bot->GetGroup())
+         {
+@@ -238,6 +288,8 @@ bool LfgAcceptAction::Execute(Event event)
+         {
+             if (bot->IsInCombat() || bot->isDead())
+             {
++                LOG_INFO("playerbots", "Living Azeroth LFG proposal decision=decline_busy bot={} proposal={}",
++                         bot->GetGUID().GetCounter(), id);
+                 WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+                 *packet << id << false;
+                 bot->GetSession()->QueuePacket(packet);
+@@ -250,6 +302,8 @@ bool LfgAcceptAction::Execute(Event event)
+             WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+             *packet << id << true;
+             bot->GetSession()->QueuePacket(packet);
++            LOG_INFO("playerbots", "Living Azeroth LFG proposal decision=accept bot={} proposal={} dungeon={}",
++                     bot->GetGUID().GetCounter(), id, dungeonId);
+ 
+             if (RandomPlayerbotMgr::instance().IsRandomBot(bot) && !bot->GetGroup())
+             {
+@@ -283,6 +337,32 @@ bool LfgLeaveAction::Execute(Event /*event*/)
+ 
+ bool LfgLeaveAction::isUseful() { return true; }
+ 
++bool NormalizePlayerbotForLfgTeleport(Player* player)
++{
++    if (!player)
++        return false;
++    if (player->IsInCombat())
++        player->CombatStop(true);
++    if (player->GetVehicle())
++        player->ExitVehicle();
++    if (player->GetCharm())
++        player->RemoveCharmAuras();
++    if (player->IsMirrorTimerActive(FATIGUE_TIMER))
++        player->StopMirrorTimers();
++    if (player->GetMotionMaster())
++    {
++        player->GetMotionMaster()->Clear(true);
++        player->GetMotionMaster()->MoveIdle();
++    }
++    player->StopMoving();
++    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
++    player->ClearUnitState(UNIT_STATE_JUMPING);
++    player->SetFallInformation(GameTime::GetGameTime().count(), player->GetPositionZ());
++    return !player->IsFalling() && !player->HasUnitState(UNIT_STATE_JUMPING) &&
++           !player->IsMirrorTimerActive(FATIGUE_TIMER) && !player->GetVehicle() &&
++           !player->GetCharm() && !player->IsInCombat();
++}
++
+ bool LfgTeleportAction::Execute(Event event)
+ {
+     bool out = false;
+@@ -294,14 +374,54 @@ bool LfgTeleportAction::Execute(Event event)
+         p >> out;
+     }
+ 
+-    bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+-
+-    WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT);
+-    *packet << out;
+-    bot->GetSession()->QueuePacket(packet);
+-    // sLFGMgr->TeleportPlayer(bot, out);
++    Group* group = bot->GetGroup();
++    bool const lfgGroup = group && group->isLFGGroup();
++    uint32 const dungeonId = lfgGroup ? sLFGMgr->GetDungeon(group->GetGUID()) : 0;
++    LFGDungeonData const* dungeon = dungeonId ? sLFGMgr->GetLFGDungeon(dungeonId) : nullptr;
++    bool const atSelectedDungeon = dungeon && bot->GetMapId() == uint32(dungeon->map);
++    bool const preCombat = bot->IsInCombat();
++    bool const preFalling = bot->IsFalling() || bot->HasUnitState(UNIT_STATE_JUMPING);
++    bool const preFatigue = bot->IsMirrorTimerActive(FATIGUE_TIMER);
++    bool const preVehicle = bot->GetVehicle() != nullptr;
++    bool const preCharm = bot->GetCharm() != nullptr;
++
++    PlayerbotLfgLifecycle::TeleportRequestDecision decision =
++        PlayerbotLfgLifecycle::EvaluateTeleportRequest(out, bot->IsAlive(), lfgGroup, dungeon != nullptr,
++                                                       atSelectedDungeon, bot->IsBeingTeleported());
++    LOG_INFO("playerbots",
++             "Living Azeroth LFG teleport decision={} bot={} direction={} group={} dungeon={} map={} instance={} "
++             "alive={} combat={} falling={} fatigue={} vehicle={} charm={}",
++             PlayerbotLfgLifecycle::ToString(decision), bot->GetGUID().GetCounter(), out ? "out" : "in",
++             group ? group->GetGUID().GetCounter() : 0, dungeonId, bot->GetMapId(), bot->GetInstanceId(),
++             bot->IsAlive(), preCombat, preFalling, preFatigue, preVehicle, preCharm);
++
++    if (decision != PlayerbotLfgLifecycle::TeleportRequestDecision::Attempt)
++        return decision == PlayerbotLfgLifecycle::TeleportRequestDecision::SuppressTeleportInProgress ||
++               decision == PlayerbotLfgLifecycle::TeleportRequestDecision::SuppressAlreadyAtDestination;
++
++    if (!NormalizePlayerbotForLfgTeleport(bot))
++    {
++        LOG_WARN("playerbots",
++                 "Living Azeroth LFG teleport result=rejected_normalization_persisted bot={} direction={} "
++                 "group={} dungeon={} falling={} jumping={} combat={} fatigue={} vehicle={} charm={}",
++                 bot->GetGUID().GetCounter(), out ? "out" : "in", group->GetGUID().GetCounter(), dungeonId,
++                 bot->IsFalling(), bot->HasUnitState(UNIT_STATE_JUMPING), bot->IsInCombat(),
++                 bot->IsMirrorTimerActive(FATIGUE_TIMER), bot->GetVehicle() != nullptr,
++                 bot->GetCharm() != nullptr);
++        return false;
++    }
+ 
+-    return true;
++    sLFGMgr->TeleportPlayer(bot, out);
++
++    bool const accepted = bot->IsBeingTeleported();
++    LOG_INFO("playerbots",
++             "Living Azeroth LFG teleport result={} bot={} direction={} group={} dungeon={} source_map={} "
++             "source_instance={} normalized_combat={} normalized_falling={} normalized_fatigue={} "
++             "normalized_vehicle={} normalized_charm={}",
++             accepted ? "accepted" : "rejected_after_normalization", bot->GetGUID().GetCounter(),
++             out ? "out" : "in", group->GetGUID().GetCounter(), dungeonId, bot->GetMapId(),
++             bot->GetInstanceId(), preCombat, preFalling, preFatigue, preVehicle, preCharm);
++    return accepted;
+ }
+ 
+ bool LfgJoinAction::isUseful()
+diff --git a/src/Ai/Base/Actions/LfgActions.h b/src/Ai/Base/Actions/LfgActions.h
+index 055d19e..75fc9c1 100644
+--- a/src/Ai/Base/Actions/LfgActions.h
++++ b/src/Ai/Base/Actions/LfgActions.h
+@@ -10,6 +10,9 @@
+ #include "InventoryAction.h"
+ 
+ class PlayerbotAI;
++class Player;
++
++bool NormalizePlayerbotForLfgTeleport(Player* player);
+ 
+ class LfgJoinAction : public InventoryAction
+ {
+diff --git a/src/Ai/Base/Actions/LfgLifecycleGuard.h b/src/Ai/Base/Actions/LfgLifecycleGuard.h
+new file mode 100644
+index 0000000..7161293
+--- /dev/null
++++ b/src/Ai/Base/Actions/LfgLifecycleGuard.h
+@@ -0,0 +1,178 @@
++#ifndef PLAYERBOTS_LFG_LIFECYCLE_GUARD_H
++#define PLAYERBOTS_LFG_LIFECYCLE_GUARD_H
++
++#include <cstdint>
++
++namespace PlayerbotLfgLifecycle
++{
++enum class RoleSubmissionDecision : uint8_t
++{
++    Submit,
++    SuppressAlreadyReady,
++    SuppressTerminalState,
++    RejectMalformed,
++    RejectMissingSelf
++};
++
++enum class DungeonReleaseDecision : uint8_t
++{
++    ReleaseImmediately,
++    WaitForPlayerResurrection,
++    ReleaseAfterGrace,
++    SuppressAlreadyGhost
++};
++
++enum class TeleportRequestDecision : uint8_t
++{
++    Attempt,
++    SuppressTeleportInProgress,
++    SuppressAlreadyAtDestination,
++    RejectNotLfgGroup,
++    RejectMissingDungeon,
++    RejectDead
++};
++
++enum class CompanionCatchupDecision : uint8_t
++{
++    Attempt,
++    RejectMissingMember,
++    SuppressAnchor,
++    RejectNotPlayerbot,
++    RejectRealPlayer,
++    SuppressSameInstance,
++    SuppressTeleportInProgress,
++    RejectDead
++};
++
++inline RoleSubmissionDecision EvaluateRoleSubmission(bool packetValid, bool initializing, bool selfFound,
++                                                      bool selfReady, uint32_t currentRoles,
++                                                      uint32_t desiredRoles)
++{
++    if (!packetValid)
++        return RoleSubmissionDecision::RejectMalformed;
++    if (!initializing)
++        return RoleSubmissionDecision::SuppressTerminalState;
++    if (!selfFound)
++        return RoleSubmissionDecision::RejectMissingSelf;
++    if (selfReady && currentRoles == desiredRoles)
++        return RoleSubmissionDecision::SuppressAlreadyReady;
++    return RoleSubmissionDecision::Submit;
++}
++
++inline DungeonReleaseDecision EvaluateDungeonRelease(bool alreadyGhost, bool protectedPlayerDungeon,
++                                                      uint32_t elapsedSeconds, uint32_t graceSeconds)
++{
++    if (alreadyGhost)
++        return DungeonReleaseDecision::SuppressAlreadyGhost;
++    if (!protectedPlayerDungeon)
++        return DungeonReleaseDecision::ReleaseImmediately;
++    if (elapsedSeconds < graceSeconds)
++        return DungeonReleaseDecision::WaitForPlayerResurrection;
++    return DungeonReleaseDecision::ReleaseAfterGrace;
++}
++
++inline bool PreserveGroupFromAmbientRecovery(bool hasGroup, bool lfgGroup, bool leaderKnown,
++                                             bool leaderIsRandomBot, bool hasLoadedRealPlayer)
++{
++    if (!hasGroup)
++        return false;
++    if (lfgGroup || hasLoadedRealPlayer)
++        return true;
++    return leaderKnown && !leaderIsRandomBot;
++}
++
++inline TeleportRequestDecision EvaluateTeleportRequest(bool out, bool alive, bool lfgGroup,
++                                                        bool dungeonKnown, bool atSelectedDungeon,
++                                                        bool teleportInProgress)
++{
++    if (!lfgGroup)
++        return TeleportRequestDecision::RejectNotLfgGroup;
++    if (!dungeonKnown)
++        return TeleportRequestDecision::RejectMissingDungeon;
++    if (teleportInProgress)
++        return TeleportRequestDecision::SuppressTeleportInProgress;
++    if (!alive)
++        return TeleportRequestDecision::RejectDead;
++    if ((!out && atSelectedDungeon) || (out && !atSelectedDungeon))
++        return TeleportRequestDecision::SuppressAlreadyAtDestination;
++    return TeleportRequestDecision::Attempt;
++}
++
++inline CompanionCatchupDecision EvaluateCompanionCatchup(bool memberPresent, bool isAnchor, bool isPlayerbot,
++                                                          bool isRealPlayer, bool alive, bool sameInstance,
++                                                          bool teleportInProgress)
++{
++    if (!memberPresent)
++        return CompanionCatchupDecision::RejectMissingMember;
++    if (isAnchor)
++        return CompanionCatchupDecision::SuppressAnchor;
++    if (!isPlayerbot)
++        return CompanionCatchupDecision::RejectNotPlayerbot;
++    if (isRealPlayer)
++        return CompanionCatchupDecision::RejectRealPlayer;
++    if (sameInstance)
++        return CompanionCatchupDecision::SuppressSameInstance;
++    if (teleportInProgress)
++        return CompanionCatchupDecision::SuppressTeleportInProgress;
++    if (!alive)
++        return CompanionCatchupDecision::RejectDead;
++    return CompanionCatchupDecision::Attempt;
++}
++
++inline char const* ToString(RoleSubmissionDecision decision)
++{
++    switch (decision)
++    {
++        case RoleSubmissionDecision::Submit: return "submit";
++        case RoleSubmissionDecision::SuppressAlreadyReady: return "suppress_already_ready";
++        case RoleSubmissionDecision::SuppressTerminalState: return "suppress_terminal_state";
++        case RoleSubmissionDecision::RejectMalformed: return "reject_malformed";
++        case RoleSubmissionDecision::RejectMissingSelf: return "reject_missing_self";
++    }
++    return "reject_unknown";
++}
++
++inline char const* ToString(DungeonReleaseDecision decision)
++{
++    switch (decision)
++    {
++        case DungeonReleaseDecision::ReleaseImmediately: return "release_immediately";
++        case DungeonReleaseDecision::WaitForPlayerResurrection: return "wait_for_player_resurrection";
++        case DungeonReleaseDecision::ReleaseAfterGrace: return "release_after_grace";
++        case DungeonReleaseDecision::SuppressAlreadyGhost: return "suppress_already_ghost";
++    }
++    return "release_unknown";
++}
++
++inline char const* ToString(TeleportRequestDecision decision)
++{
++    switch (decision)
++    {
++        case TeleportRequestDecision::Attempt: return "attempt";
++        case TeleportRequestDecision::SuppressTeleportInProgress: return "suppress_teleport_in_progress";
++        case TeleportRequestDecision::SuppressAlreadyAtDestination: return "suppress_already_at_destination";
++        case TeleportRequestDecision::RejectNotLfgGroup: return "reject_not_lfg_group";
++        case TeleportRequestDecision::RejectMissingDungeon: return "reject_missing_dungeon";
++        case TeleportRequestDecision::RejectDead: return "reject_dead";
++    }
++    return "reject_unknown";
++}
++
++inline char const* ToString(CompanionCatchupDecision decision)
++{
++    switch (decision)
++    {
++        case CompanionCatchupDecision::Attempt: return "attempt";
++        case CompanionCatchupDecision::RejectMissingMember: return "reject_missing_member";
++        case CompanionCatchupDecision::SuppressAnchor: return "suppress_anchor";
++        case CompanionCatchupDecision::RejectNotPlayerbot: return "reject_not_playerbot";
++        case CompanionCatchupDecision::RejectRealPlayer: return "reject_real_player";
++        case CompanionCatchupDecision::SuppressSameInstance: return "suppress_same_instance";
++        case CompanionCatchupDecision::SuppressTeleportInProgress: return "suppress_teleport_in_progress";
++        case CompanionCatchupDecision::RejectDead: return "reject_dead";
++    }
++    return "reject_unknown";
++}
++}
++
++#endif
+diff --git a/src/Ai/Base/Actions/LivingAzerothChat.h b/src/Ai/Base/Actions/LivingAzerothChat.h
+new file mode 100644
+index 0000000..c9ae6bd
+--- /dev/null
++++ b/src/Ai/Base/Actions/LivingAzerothChat.h
+@@ -0,0 +1,292 @@
++/*
++ * Living Azeroth Chat v2 contains only bounded, in-memory chat classification.
++ * It must remain safe to call from the playerbot update path: no database,
++ * filesystem, lock, network, or external-model work belongs here.
++ */
++
++#ifndef PLAYERBOT_LIVING_AZEROTH_CHAT_H
++#define PLAYERBOT_LIVING_AZEROTH_CHAT_H
++
++#include <array>
++#include <atomic>
++#include <cctype>
++#include <cstdint>
++#include <ctime>
++#include <initializer_list>
++#include <string>
++#include <string_view>
++
++namespace LivingAzerothChat
++{
++enum class Intent
++{
++    Greeting,
++    Thanks,
++    Goodbye,
++    Location,
++    Activity,
++    Identity,
++    Level,
++    Quest,
++    Group,
++    Trade,
++    Role,
++    Help,
++    Guild,
++    Faction,
++    Combat,
++    Unknown
++};
++
++enum class Persona
++{
++    Sentinel,
++    Scout,
++    Scholar,
++    Mercenary,
++    Wanderer
++};
++
++inline std::string Normalize(std::string_view input)
++{
++    std::string result;
++    result.reserve(input.size() > 255 ? 255 : input.size());
++    bool pendingSpace = false;
++    std::size_t const length = input.size() > 255 ? 255 : input.size();
++
++    for (std::size_t index = 0; index < length; ++index)
++    {
++        unsigned char const character = static_cast<unsigned char>(input[index]);
++        if (std::isalnum(character))
++        {
++            if (pendingSpace && !result.empty())
++                result.push_back(' ');
++
++            result.push_back(static_cast<char>(std::tolower(character)));
++            pendingSpace = false;
++        }
++        else
++            pendingSpace = !result.empty();
++    }
++
++    return result;
++}
++
++inline bool ContainsToken(std::string_view normalized, std::string_view token)
++{
++    if (token.empty())
++        return false;
++
++    std::size_t position = normalized.find(token);
++    while (position != std::string_view::npos)
++    {
++        bool const validStart = position == 0 || normalized[position - 1] == ' ';
++        std::size_t const end = position + token.size();
++        bool const validEnd = end == normalized.size() || normalized[end] == ' ';
++        if (validStart && validEnd)
++            return true;
++
++        position = normalized.find(token, position + 1);
++    }
++
++    return false;
++}
++
++inline bool ContainsAny(std::string_view normalized, std::initializer_list<std::string_view> tokens)
++{
++    for (std::string_view token : tokens)
++        if (ContainsToken(normalized, token))
++            return true;
++
++    return false;
++}
++
++inline bool StartsWithToken(std::string_view normalized, std::string_view token)
++{
++    return normalized == token ||
++           (normalized.size() > token.size() && normalized.starts_with(token) && normalized[token.size()] == ' ');
++}
++
++inline bool IsCommand(std::string_view input)
++{
++    std::string const normalized = Normalize(input);
++    for (std::string_view command : { "follow", "stay", "attack", "pull", "flee", "reset", "cast",
++                                      "accept", "destroy", "join", "leave", "repair", "summon", "guard" })
++        if (StartsWithToken(normalized, command))
++            return true;
++
++    return false;
++}
++
++inline Intent DetectIntent(std::string_view input)
++{
++    std::string const normalized = Normalize(input);
++
++    if (normalized.find("who are you") != std::string::npos ||
++        normalized.find("what is your name") != std::string::npos ||
++        normalized.find("what s your name") != std::string::npos)
++        return Intent::Identity;
++    if (ContainsAny(normalized, { "level", "lvl" }))
++        return Intent::Level;
++    if (normalized.find("where are you") != std::string::npos ||
++        ContainsAny(normalized, { "where", "location", "zone" }))
++        return Intent::Location;
++    if (ContainsAny(normalized, { "quest", "questing", "objective" }))
++        return Intent::Quest;
++    if (ContainsAny(normalized, { "group", "party", "invite", "dungeon", "lfg", "lfm", "raid" }))
++        return Intent::Group;
++    if (ContainsAny(normalized, { "trade", "auction", "buy", "sell", "wtb", "wts", "item" }))
++        return Intent::Trade;
++    if (ContainsAny(normalized, { "guild", "rank" }))
++        return Intent::Guild;
++    if (ContainsAny(normalized, { "alliance", "horde", "faction" }))
++        return Intent::Faction;
++    if (ContainsAny(normalized, { "fight", "fighting", "combat", "attack", "war", "pvp" }))
++        return Intent::Combat;
++    if (ContainsAny(normalized, { "class", "role", "spec", "tank", "healer", "heal", "dps" }))
++        return Intent::Role;
++    if (normalized.find("what are you doing") != std::string::npos ||
++        normalized.find("how are you") != std::string::npos ||
++        normalized.find("what s up") != std::string::npos ||
++        ContainsAny(normalized, { "doing", "busy", "status", "up" }))
++        return Intent::Activity;
++    if (ContainsAny(normalized, { "help", "commands" }))
++        return Intent::Help;
++    if (ContainsAny(normalized, { "thanks", "thank", "ty" }))
++        return Intent::Thanks;
++    if (ContainsAny(normalized, { "bye", "goodbye", "later", "farewell" }))
++        return Intent::Goodbye;
++    if (ContainsAny(normalized, { "hello", "hi", "hey", "greetings", "wazzup" }))
++        return Intent::Greeting;
++
++    return Intent::Unknown;
++}
++
++inline char const* IntentName(Intent intent)
++{
++    switch (intent)
++    {
++        case Intent::Greeting:
++            return "greeting";
++        case Intent::Thanks:
++            return "thanks";
++        case Intent::Goodbye:
++            return "goodbye";
++        case Intent::Location:
++            return "location";
++        case Intent::Activity:
++            return "activity";
++        case Intent::Identity:
++            return "identity";
++        case Intent::Level:
++            return "level";
++        case Intent::Quest:
++            return "quest";
++        case Intent::Group:
++            return "group";
++        case Intent::Trade:
++            return "trade";
++        case Intent::Role:
++            return "role";
++        case Intent::Help:
++            return "help";
++        case Intent::Guild:
++            return "guild";
++        case Intent::Faction:
++            return "faction";
++        case Intent::Combat:
++            return "combat";
++        case Intent::Unknown:
++            return "unknown";
++    }
++
++    return "unknown";
++}
++
++inline uint64_t StableHash(std::string_view input)
++{
++    uint64_t hash = 14695981039346656037ULL;
++    for (unsigned char character : input)
++    {
++        hash ^= character;
++        hash *= 1099511628211ULL;
++    }
++
++    return hash;
++}
++
++inline Persona SelectPersona(std::string_view stableIdentity)
++{
++    return static_cast<Persona>(StableHash(stableIdentity) % 5);
++}
++
++inline uint32_t SelectVariant(
++    std::string_view stableIdentity,
++    std::string_view incomingMessage,
++    std::time_t now,
++    uint32_t choices)
++{
++    if (!choices)
++        return 0;
++
++    uint64_t hash = StableHash(stableIdentity);
++    uint64_t const messageHash = StableHash(Normalize(incomingMessage));
++    uint64_t const timeBucket = now > 0 ? static_cast<uint64_t>(now) / 300ULL : 0;
++    hash ^= messageHash + 0x9E3779B97F4A7C15ULL + (hash << 6) + (hash >> 2);
++    hash ^= timeBucket + 0x9E3779B97F4A7C15ULL + (hash << 6) + (hash >> 2);
++    return static_cast<uint32_t>(hash % choices);
++}
++
++class ReplyArbiter
++{
++public:
++    static bool TryClaim(std::string_view conversationKey, std::time_t now, uint32_t ttlSeconds = 5)
++    {
++        uint64_t const keyHash = StableHash(conversationKey);
++        uint32_t fingerprint = static_cast<uint32_t>(keyHash >> 32);
++        if (!fingerprint)
++            fingerprint = 1;
++        uint32_t const expires = static_cast<uint32_t>(now) + (ttlSeconds ? ttlSeconds : 1);
++        uint64_t const desired = (static_cast<uint64_t>(fingerprint) << 32) | expires;
++        auto& claims = GetClaims();
++
++        for (uint8_t probe = 0; probe < 8; ++probe)
++        {
++            auto& claim = claims[(keyHash + probe) % claims.size()];
++            for (uint8_t attempt = 0; attempt < 3; ++attempt)
++            {
++                uint64_t expected = claim.load(std::memory_order_relaxed);
++                uint32_t const currentFingerprint = static_cast<uint32_t>(expected >> 32);
++                uint32_t const currentExpiry = static_cast<uint32_t>(expected & 0xFFFFFFFFULL);
++                if (expected && static_cast<uint32_t>(now) < currentExpiry)
++                {
++                    if (currentFingerprint == fingerprint)
++                        return false;
++                    break;
++                }
++
++                if (claim.compare_exchange_weak(
++                        expected, desired, std::memory_order_acq_rel, std::memory_order_relaxed))
++                    return true;
++            }
++        }
++
++        return false;
++    }
++
++    static void ResetForTests()
++    {
++        for (auto& claim : GetClaims())
++            claim.store(0, std::memory_order_relaxed);
++    }
++
++private:
++    static std::array<std::atomic<uint64_t>, 4096>& GetClaims()
++    {
++        static std::array<std::atomic<uint64_t>, 4096> claims{};
++        return claims;
++    }
++};
++}
++
++#endif
+diff --git a/src/Ai/Base/Actions/LivingAzerothChatReply.h b/src/Ai/Base/Actions/LivingAzerothChatReply.h
+new file mode 100644
+index 0000000..4ee1eca
+--- /dev/null
++++ b/src/Ai/Base/Actions/LivingAzerothChatReply.h
+@@ -0,0 +1,224 @@
++/*
++ * Context rendering for Living Azeroth Chat v2. Callers provide live objects
++ * for the duration of one reply only; this file stores no object pointers.
++ */
++
++#ifndef PLAYERBOT_LIVING_AZEROTH_CHAT_REPLY_H
++#define PLAYERBOT_LIVING_AZEROTH_CHAT_REPLY_H
++
++#include "ChatHelper.h"
++#include "Guild.h"
++#include "GuildMgr.h"
++#include "LivingAzerothChat.h"
++#include "ObjectMgr.h"
++#include "Player.h"
++#include "PlayerbotAI.h"
++#include "PlayerbotTextMgr.h"
++#include "Playerbots.h"
++
++#include <sstream>
++#include <string>
++#include <string_view>
++
++namespace LivingAzerothChat
++{
++inline std::string CurrentZone(PlayerbotAI* botAI)
++{
++    AreaTableEntry const* zone = botAI->GetCurrentZone();
++    return zone ? botAI->GetLocalizedAreaName(zone)
++                : PlayerbotTextMgr::instance().GetBotText("string_unknown_area");
++}
++
++inline std::string CurrentQuest(PlayerbotAI* botAI)
++{
++    auto const questIds = botAI->GetCurrentIncompleteQuestIds();
++    uint32 selectedQuestId = 0;
++    for (uint32 questId : questIds)
++    {
++        if (!selectedQuestId || questId < selectedQuestId)
++            selectedQuestId = questId;
++    }
++
++    if (!selectedQuestId)
++        return "";
++
++    Quest const* quest = sObjectMgr->GetQuestTemplate(selectedQuestId);
++    return quest ? quest->GetTitle() : "";
++}
++
++inline std::string PersonaGreeting(Persona persona, bool alliance)
++{
++    switch (persona)
++    {
++        case Persona::Sentinel:
++            return alliance ? "Well met" : "Strength and honor";
++        case Persona::Scout:
++            return "Good to see you";
++        case Persona::Scholar:
++            return "Greetings";
++        case Persona::Mercenary:
++            return "You look capable";
++        case Persona::Wanderer:
++            return "Safe roads";
++    }
++
++    return "Greetings";
++}
++
++inline std::string BuildReply(Player* bot, std::string_view incomingMessage, std::string const& speakerName)
++{
++    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
++    if (!botAI)
++        return "";
++
++    std::ostringstream identity;
++    identity << bot->GetGUID().ToString() << '|' << bot->GetName() << '|'
++             << static_cast<uint32>(bot->getRace()) << '|'
++             << static_cast<uint32>(bot->getClass()) << '|' << static_cast<uint32>(bot->getGender()) << '|'
++             << static_cast<uint32>(bot->GetTeamId());
++
++    Persona const persona = SelectPersona(identity.str());
++    Intent const intent = DetectIntent(incomingMessage);
++    uint32_t const variant = SelectVariant(identity.str(), incomingMessage, std::time(nullptr), 3);
++    std::string const speaker = speakerName.empty() ? "traveler" : speakerName;
++
++    bool const alliance = bot->GetTeamId() == TEAM_ALLIANCE;
++    std::string const faction = alliance ? "Alliance" : "Horde";
++    std::string const zone = CurrentZone(botAI);
++    std::string const className = botAI->GetChatHelper()->FormatClass(bot->getClass());
++    std::string const role = PlayerbotAI::IsTank(bot, true) ? "tank"
++                               : (PlayerbotAI::IsHeal(bot, true) ? "healer" : "damage");
++    std::string const quest = CurrentQuest(botAI);
++    std::ostringstream response;
++
++    switch (intent)
++    {
++        case Intent::Greeting:
++            if (variant == 0)
++                response << PersonaGreeting(persona, alliance) << ", " << speaker << ". I'm " << bot->GetName()
++                         << ", a level " << bot->GetLevel() << ' ' << className << " in " << zone << '.';
++            else if (variant == 1)
++                response << "Hey, " << speaker << ". " << bot->GetName() << " here - I'm working around " << zone
++                         << " today.";
++            else
++                response << "Good to meet you, " << speaker << ". I'm " << bot->GetName() << ", " << role
++                         << " for the " << faction << '.';
++            break;
++        case Intent::Thanks:
++            if (variant == 0)
++                response << "Anytime, " << speaker << ". Safe travels.";
++            else if (variant == 1)
++                response << "Glad I could help, " << speaker << '.';
++            else
++                response << "You got it, " << speaker << ". Watch your back out there.";
++            break;
++        case Intent::Goodbye:
++            if (variant == 0)
++                response << "Safe travels, " << speaker << ". Perhaps our paths will cross again.";
++            else if (variant == 1)
++                response << "See you on the road, " << speaker << '.';
++            else
++                response << "Until next time, " << speaker << ". Stay sharp.";
++            break;
++        case Intent::Location:
++            if (variant == 0)
++                response << "I'm in " << zone << " right now, " << speaker << '.';
++            else if (variant == 1)
++                response << "You'll find me around " << zone << ", " << speaker << '.';
++            else
++                response << "I'm traveling through " << zone << " at the moment.";
++            break;
++        case Intent::Activity:
++            if (bot->IsInCombat())
++                response << "I'm fighting in " << zone << ". Give me a moment, " << speaker << '.';
++            else if (!quest.empty())
++                response << (variant == 0 ? "I'm working on " : "I'm making progress on ") << quest << " in "
++                         << zone << '.';
++            else
++                response << (variant == 0 ? "I'm traveling through " : "I'm keeping busy around ") << zone
++                         << " and looking for useful work.";
++            break;
++        case Intent::Identity:
++            if (variant == 0)
++                response << "I'm " << bot->GetName() << ", a level " << bot->GetLevel() << ' ' << className
++                         << " with the " << faction << '.';
++            else if (variant == 1)
++                response << bot->GetName() << ". I work as " << role << " and I'm currently in " << zone << '.';
++            else
++                response << "Name's " << bot->GetName() << ". I'm a " << className << " traveling for the "
++                         << faction << '.';
++            break;
++        case Intent::Level:
++            response << "I'm level " << bot->GetLevel() << " - a " << className << " built for " << role << '.';
++            break;
++        case Intent::Quest:
++            if (!quest.empty())
++                response << (variant == 0 ? "I'm currently working on " : "My focus right now is ") << quest
++                         << " in " << zone << '.';
++            else
++                response << "Nothing active right now. I'm looking for work in " << zone << '.';
++            break;
++        case Intent::Group:
++            if (bot->GetGroup())
++                response << "I'm already grouped, filling the " << role << " role near " << zone << '.';
++            else
++                response << (variant == 0 ? "I'm available as " : "I can join as ") << role << ". I'm level "
++                         << bot->GetLevel() << " in " << zone << '.';
++            break;
++        case Intent::Trade:
++            response << "Link the item with WTB, " << speaker << ", and I'll check what I have.";
++            break;
++        case Intent::Role:
++            response << "I'm a level " << bot->GetLevel() << ' ' << className << ", built for " << role << '.';
++            break;
++        case Intent::Help:
++            response << "Ask me who I am, my level, quest, group role, location, guild, faction, combat, or trade.";
++            break;
++        case Intent::Guild:
++        {
++            if (bot->GetGuildId())
++            {
++                Guild* guild = sGuildMgr->GetGuildById(bot->GetGuildId());
++                if (guild)
++                    response << "I'm with " << guild->GetName() << ". My standing comes from what I do in the world.";
++                else
++                    response << "I belong to a guild. My standing comes from what I do in the world.";
++            }
++            else
++                response << "I'm not sworn to a guild yet. For now, I fight for the " << faction << '.';
++            break;
++        }
++        case Intent::Faction:
++            response << "My loyalty is with the " << faction << ". You'll see it in where I travel and who I fight.";
++            break;
++        case Intent::Combat:
++            if (bot->IsInCombat())
++                response << "I'm in combat now in " << zone << '.';
++            else
++                response << "No fight at this moment, but I'm ready to defend the " << faction << '.';
++            break;
++        case Intent::Unknown:
++            if (variant == 0)
++                response << "I didn't quite catch that, " << speaker
++                         << ". Ask me where I am, what I'm doing, or about quests and groups.";
++            else if (variant == 1)
++                response << "Say that another way, " << speaker << "? I can tell you what I'm working on.";
++            else
++                response << "Not sure I followed. Ask me about my level, location, guild, or current quest.";
++            break;
++    }
++
++    std::string result = response.str();
++    if (result.size() > 255)
++    {
++        std::size_t cut = 255;
++        while (cut > 0 && (static_cast<unsigned char>(result[cut]) & 0xC0) == 0x80)
++            --cut;
++        result.resize(cut);
++    }
++
++    return result;
++}
++}
++
++#endif
+diff --git a/src/Ai/Base/Actions/MovementActions.cpp b/src/Ai/Base/Actions/MovementActions.cpp
+index 192a8ba..f98ea8d 100644
+--- a/src/Ai/Base/Actions/MovementActions.cpp
++++ b/src/Ai/Base/Actions/MovementActions.cpp
+@@ -19,6 +19,7 @@
+ #include "LastMovementValue.h"
+ #include "LootObjectStack.h"
+ #include "Map.h"
++#include "MapMgr.h"
+ #include "MotionMaster.h"
+ #include "MoveSplineInitArgs.h"
+ #include "MovementGenerator.h"
+@@ -171,6 +172,12 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
+ bool MovementAction::MoveTo(uint32 mapId, float x, float y, float z, bool /*idle*/, bool /*react*/, bool normal_only,
+                             bool exact_waypoint, MovementPriority priority, bool lessDelay, bool backwards)
+ {
++    if (!MapMgr::IsValidMapCoord(mapId, x, y, z))
++    {
++        LOG_WARN("playerbots", "MovementAction rejected invalid destination for bot_guid={} map_id={}",
++            bot->GetGUID().GetCounter(), mapId);
++        return false;
++    }
+     UpdateMovementState();
+     if (!IsMovingAllowed())
+     {
+@@ -243,7 +250,7 @@ bool MovementAction::MoveTo(uint32 mapId, float x, float y, float z, bool /*idle
+         float modifiedZ;
+         Movement::PointsArray path =
+             SearchForBestPath(x, y, z, modifiedZ, sPlayerbotAIConfig.maxMovementSearchTime, normal_only);
+-        if (modifiedZ == INVALID_HEIGHT)
++        if (!MapMgr::IsValidMapCoord(mapId, x, y, modifiedZ))
+             return false;
+         float distance = bot->GetExactDist(x, y, modifiedZ);
+         if (distance > 0.01f)
+@@ -1746,7 +1753,7 @@ const Movement::PointsArray MovementAction::SearchForBestPath(float x, float y,
+     for (float delta = step; count < maxSearchCount / 2 + 1; count++, delta += step)
+     {
+         tempZ = bot->GetMapHeight(x, y, z + delta);
+-        if (tempZ == INVALID_HEIGHT)
++        if (!Acore::IsValidMapCoord(tempZ))
+         {
+             continue;
+         }
+@@ -1763,7 +1770,7 @@ const Movement::PointsArray MovementAction::SearchForBestPath(float x, float y,
+     for (float delta = -step; count < maxSearchCount; count++, delta -= step)
+     {
+         tempZ = bot->GetMapHeight(x, y, z + delta);
+-        if (tempZ == INVALID_HEIGHT)
++        if (!Acore::IsValidMapCoord(tempZ))
+         {
+             continue;
+         }
+diff --git a/src/Ai/Base/Actions/ReleaseSpiritAction.cpp b/src/Ai/Base/Actions/ReleaseSpiritAction.cpp
+index 78897c0..d82f4e8 100644
+--- a/src/Ai/Base/Actions/ReleaseSpiritAction.cpp
++++ b/src/Ai/Base/Actions/ReleaseSpiritAction.cpp
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "ReleaseSpiritAction.h"
++#include "LfgLifecycleGuard.h"
+ #include "ServerFacade.h"
+ #include "Event.h"
+ #include "GameGraveyard.h"
+@@ -83,6 +84,7 @@ void ReleaseSpiritAction::LogRelease(const std::string& releaseMsg) const
+ // AutoReleaseSpiritAction implementation
+ bool AutoReleaseSpiritAction::Execute(Event /*event*/)
+ {
++    m_dungeonDeathWaitStarted = 0;
+     IncrementDeathCount();
+     bot->DurabilityRepairAll(false, 1.0f, false);
+     LogRelease("auto released");
+@@ -166,29 +168,46 @@ bool AutoReleaseSpiritAction::HandleBattlegroundSpiritHealer()
+     return true;
+ }
+ 
+-bool AutoReleaseSpiritAction::ShouldAutoRelease() const
++bool AutoReleaseSpiritAction::ShouldAutoRelease()
+ {
+-    if (!bot->GetGroup())
+-        return true;
+-
+     Player* groupLeader = botAI->GetGroupLeader();
+-    if (!groupLeader || groupLeader == bot)
+-        return true;
++    bool protectedPlayerDungeon = bot->GetGroup() && groupLeader && groupLeader != bot &&
++        botAI->HasActivePlayerMaster() && groupLeader->GetMapId() == bot->GetMapId() &&
++        bot->GetMap() && (bot->GetMap()->IsRaid() || bot->GetMap()->IsDungeon());
+ 
+-    if (!botAI->HasActivePlayerMaster())
+-        return true;
++    time_t now = time(nullptr);
++    if (protectedPlayerDungeon && m_dungeonDeathWaitStarted == 0)
++    {
++        m_dungeonDeathWaitStarted = now;
++        LOG_INFO("playerbots",
++                 "Living Azeroth dungeon recovery decision=wait_for_player_resurrection bot={} group={} map={} "
++                 "instance={} grace_seconds=15",
++                 bot->GetGUID().GetCounter(), bot->GetGroup()->GetGUID().GetCounter(), bot->GetMapId(),
++                 bot->GetInstanceId());
++    }
+ 
+-    if (botAI->HasActivePlayerMaster() &&
+-        groupLeader->GetMapId() == bot->GetMapId() &&
+-        bot->GetMap() &&
+-        (bot->GetMap()->IsRaid() || bot->GetMap()->IsDungeon()))
++    uint32 elapsedSeconds = m_dungeonDeathWaitStarted == 0 || now <= m_dungeonDeathWaitStarted ? 0 :
++        static_cast<uint32>(now - m_dungeonDeathWaitStarted);
++    PlayerbotLfgLifecycle::DungeonReleaseDecision decision =
++        PlayerbotLfgLifecycle::EvaluateDungeonRelease(bot->HasPlayerFlag(PLAYER_FLAGS_GHOST),
++                                                      protectedPlayerDungeon, elapsedSeconds, 15);
++    if (decision == PlayerbotLfgLifecycle::DungeonReleaseDecision::WaitForPlayerResurrection ||
++        decision == PlayerbotLfgLifecycle::DungeonReleaseDecision::SuppressAlreadyGhost)
+     {
+         return false;
+     }
+ 
+-    return ServerFacade::instance().IsDistanceGreaterThan(
+-        AI_VALUE2(float, "distance", "group leader"),
+-        sPlayerbotAIConfig.sightDistance);
++    if (decision == PlayerbotLfgLifecycle::DungeonReleaseDecision::ReleaseAfterGrace)
++    {
++        LOG_INFO("playerbots",
++                 "Living Azeroth dungeon recovery decision=release_after_grace bot={} group={} map={} instance={} "
++                 "elapsed_seconds={}",
++                 bot->GetGUID().GetCounter(), bot->GetGroup()->GetGUID().GetCounter(), bot->GetMapId(),
++                 bot->GetInstanceId(), elapsedSeconds);
++    }
++
++    m_dungeonDeathWaitStarted = 0;
++    return true;
+ }
+ 
+ bool AutoReleaseSpiritAction::ShouldDelayBattlegroundRelease() const
+diff --git a/src/Ai/Base/Actions/ReleaseSpiritAction.h b/src/Ai/Base/Actions/ReleaseSpiritAction.h
+index ac3fd99..d796b0e 100644
+--- a/src/Ai/Base/Actions/ReleaseSpiritAction.h
++++ b/src/Ai/Base/Actions/ReleaseSpiritAction.h
+@@ -36,10 +36,11 @@ public:
+ 
+ private:
+     bool HandleBattlegroundSpiritHealer();
+-    bool ShouldAutoRelease() const;
++    bool ShouldAutoRelease();
+     bool ShouldDelayBattlegroundRelease() const;
+ 
+     time_t m_bgGossipTime = 0;
++    time_t m_dungeonDeathWaitStarted = 0;
+ };
+ 
+ class RepopAction : public SpiritHealerAction
+diff --git a/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp b/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
+index 9831746..e8378d7 100644
+--- a/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
++++ b/src/Ai/Base/Actions/ReviveFromCorpseAction.cpp
+@@ -309,6 +309,13 @@ bool SpiritHealerAction::Execute(Event /*event*/)
+     GraveyardStruct const* ClosestGrave =
+         GetGrave(dCount > 10 || deadTime > 15 * MINUTE || AI_VALUE(uint8, "durability") < 10);
+ 
++    if (!ClosestGrave)
++    {
++        LOG_ERROR("playerbots", "Living Azeroth dungeon recovery result=missing_graveyard bot={} map={} instance={}",
++                  bot->GetGUID().GetCounter(), bot->GetMapId(), bot->GetInstanceId());
++        return false;
++    }
++
+     if (bot->GetDistance2d(ClosestGrave->x, ClosestGrave->y) < sPlayerbotAIConfig.sightDistance)
+     {
+         GuidVector npcs = AI_VALUE(GuidVector, "nearest npcs");
+@@ -334,11 +341,6 @@ bool SpiritHealerAction::Execute(Event /*event*/)
+         }
+     }
+ 
+-    if (!ClosestGrave)
+-    {
+-        return false;
+-    }
+-
+     bool moved = false;
+ 
+     if (bot->IsWithinLOS(ClosestGrave->x, ClosestGrave->y, ClosestGrave->z))
+diff --git a/src/Ai/Base/Actions/SayAction.cpp b/src/Ai/Base/Actions/SayAction.cpp
+index ab6dbe6..fa9e9a0 100644
+--- a/src/Ai/Base/Actions/SayAction.cpp
++++ b/src/Ai/Base/Actions/SayAction.cpp
+@@ -11,6 +11,7 @@
+ #include <string>
+ 
+ #include "Event.h"
++#include "LivingAzerothChatReply.h"
+ #include "PlayerbotTextMgr.h"
+ #include "Playerbots.h"
+ 
+@@ -53,6 +54,18 @@ static const std::unordered_set<std::string> noReplyMsgParts = {
+     "+", "-", "@", "follow target", "focus heal", "cast ", "accept [", "e [", "destroy [", "go zone"};
+ static const std::unordered_set<std::string> noReplyMsgStarts = {"e ", "accept ", "cast ", "destroy "};
+ 
++static void SetChatReplyCooldown(Player* bot, uint32 legacyMaximum)
++{
++    uint32 const cooldownMin = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                   ? sPlayerbotAIConfig.livingAzerothChatCooldownMin
++                                   : 5;
++    uint32 const cooldownMax = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                   ? sPlayerbotAIConfig.livingAzerothChatCooldownMax
++                                   : legacyMaximum;
++    GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")
++        ->Set(time(nullptr) + urand(cooldownMin, cooldownMax));
++}
++
+ SayAction::SayAction(PlayerbotAI* botAI) : Action(botAI, "say"), Qualified() {}
+ 
+ bool SayAction::Execute(Event /*event*/)
+@@ -158,6 +171,10 @@ bool SayAction::isUseful()
+ void ChatReplyAction::ChatReplyDo(Player* bot, uint32& type, uint32& guid1, std::string& msg, std::string& chanName, std::string& name)
+ {
+     std::string respondsText = "";
++    std::string const normalizedMessage = LivingAzerothChat::Normalize(msg);
++
++    if (sPlayerbotAIConfig.livingAzerothChatEnabled && LivingAzerothChat::IsCommand(msg))
++        return;
+ 
+     // if we're just commanding bots around, don't respond...
+     // first one is for exact word matches
+@@ -192,18 +209,28 @@ void ChatReplyAction::ChatReplyDo(Player* bot, uint32& type, uint32& guid1, std:
+     }
+ 
+     ChatChannelSource chatChannelSource = GET_PLAYERBOT_AI(bot)->GetChatChannelSource(bot, type, chanName);
+-    if ((msg.starts_with("LFG") || msg.starts_with("LFM")) && HandleLFGQuestsReply(bot, chatChannelSource, msg, name))
++    bool const isLookingForGroup = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                       ? (LivingAzerothChat::StartsWithToken(normalizedMessage, "lfg") ||
++                                           LivingAzerothChat::StartsWithToken(normalizedMessage, "lfm"))
++                                       : (msg.starts_with("LFG") || msg.starts_with("LFM"));
++    if (!sPlayerbotAIConfig.livingAzerothChatEnabled && isLookingForGroup &&
++        HandleLFGQuestsReply(bot, chatChannelSource, msg, name))
+     {
+         return;
+     }
+ 
+-    if (msg.starts_with("WTB") && HandleWTBItemsReply(bot, chatChannelSource, msg, name))
++    bool const isLookingToBuy = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                    ? LivingAzerothChat::StartsWithToken(normalizedMessage, "wtb")
++                                    : msg.starts_with("WTB");
++    if (!sPlayerbotAIConfig.livingAzerothChatEnabled && isLookingToBuy &&
++        HandleWTBItemsReply(bot, chatChannelSource, msg, name))
+     {
+         return;
+     }
+ 
+     //toxic links
+-    if (msg.starts_with(sPlayerbotAIConfig.toxicLinksPrefix)
++    if (!sPlayerbotAIConfig.livingAzerothChatEnabled &&
++        msg.starts_with(sPlayerbotAIConfig.toxicLinksPrefix)
+         && (GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllItemIds(msg).size() > 0 || GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllQuestIds(msg).size() > 0))
+     {
+         HandleToxicLinksReply(bot, chatChannelSource);
+@@ -211,14 +238,17 @@ void ChatReplyAction::ChatReplyDo(Player* bot, uint32& type, uint32& guid1, std:
+     }
+ 
+     //thunderfury
+-    if (GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllItemIds(msg).count(19019))
++    if (!sPlayerbotAIConfig.livingAzerothChatEnabled &&
++        GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllItemIds(msg).count(19019))
+     {
+         HandleThunderfuryReply(bot, chatChannelSource);
+         return;
+     }
+ 
+-    auto messageRepy = GenerateReplyMessage(bot, msg, guid1, name);
+-    SendGeneralResponse(bot, chatChannelSource, messageRepy, name);
++    std::string messageReply = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                   ? LivingAzerothChat::BuildReply(bot, msg, name)
++                                   : GenerateReplyMessage(bot, msg, guid1, name);
++    SendGeneralResponse(bot, chatChannelSource, messageReply, name);
+ }
+ 
+ bool ChatReplyAction::HandleThunderfuryReply(Player* bot, ChatChannelSource chatChannelSource)
+@@ -245,7 +275,7 @@ bool ChatReplyAction::HandleThunderfuryReply(Player* bot, ChatChannelSource chat
+             break;
+     }
+ 
+-    GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 25));
++    SetChatReplyCooldown(bot, 25);
+     return true;
+ }
+ 
+@@ -311,7 +341,7 @@ bool ChatReplyAction::HandleToxicLinksReply(Player* bot, ChatChannelSource chatC
+             break;
+     }
+ 
+-    GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 60));
++    SetChatReplyCooldown(bot, 60);
+ 
+     return true;
+ }
+@@ -405,7 +435,7 @@ bool ChatReplyAction::HandleWTBItemsReply(Player* bot, ChatChannelSource chatCha
+             default:
+             break;
+         }
+-        GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 60));
++        SetChatReplyCooldown(bot, 60);
+     }
+ 
+     return true;
+@@ -491,7 +521,7 @@ bool ChatReplyAction::HandleLFGQuestsReply(Player* bot, ChatChannelSource chatCh
+             default:
+             break;
+         }
+-        GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 25));
++        SetChatReplyCooldown(bot, 25);
+     }
+ 
+     return true;
+@@ -499,22 +529,24 @@ bool ChatReplyAction::HandleLFGQuestsReply(Player* bot, ChatChannelSource chatCh
+ 
+ bool ChatReplyAction::SendGeneralResponse(Player* bot, ChatChannelSource chatChannelSource, std::string& responseMessage, std::string& name)
+ {
++    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
++    bool sent = false;
+     // send responds
+     switch (chatChannelSource)
+     {
+         case ChatChannelSource::SRC_WORLD:
+         {
+             //may reply to the same channel or whisper
+-            GET_PLAYERBOT_AI(bot)->SayToWorld(responseMessage);
++            sent = botAI->SayToWorld(responseMessage);
+             break;
+         }
+         case ChatChannelSource::SRC_GENERAL:
+         {
+             //may reply to the same channel 80% or whisper
+             if (urand(0, 100) < 80)
+-                GET_PLAYERBOT_AI(bot)->SayToChannel(responseMessage, ChatChannelId::GENERAL);
++                sent = botAI->SayToChannel(responseMessage, ChatChannelId::GENERAL);
+             else
+-                GET_PLAYERBOT_AI(bot)->Whisper(responseMessage, name);
++                sent = botAI->Whisper(responseMessage, name);
+             break;
+         }
+         case ChatChannelSource::SRC_TRADE:
+@@ -526,7 +558,7 @@ bool ChatReplyAction::SendGeneralResponse(Player* bot, ChatChannelSource chatCha
+         case ChatChannelSource::SRC_LOCAL_DEFENSE:
+         {
+             //may reply to the same channel or whisper
+-            GET_PLAYERBOT_AI(bot)->SayToChannel(responseMessage, ChatChannelId::LOCAL_DEFENSE);
++            sent = botAI->SayToChannel(responseMessage, ChatChannelId::LOCAL_DEFENSE);
+             break;
+         }
+         case ChatChannelSource::SRC_WORLD_DEFENSE:
+@@ -546,29 +578,47 @@ bool ChatReplyAction::SendGeneralResponse(Player* bot, ChatChannelSource chatCha
+         }
+         case ChatChannelSource::SRC_WHISPER:
+         {
+-            GET_PLAYERBOT_AI(bot)->Whisper(responseMessage, name);
++            sent = botAI->Whisper(responseMessage, name);
+             break;
+         }
+         case ChatChannelSource::SRC_SAY:
+         {
+-            GET_PLAYERBOT_AI(bot)->Say(responseMessage);
++            sent = botAI->Say(responseMessage);
+             break;
+         }
+         case ChatChannelSource::SRC_YELL:
+         {
+-            GET_PLAYERBOT_AI(bot)->Yell(responseMessage);
++            sent = botAI->Yell(responseMessage);
+             break;
+         }
+         case ChatChannelSource::SRC_GUILD:
+         {
+-            GET_PLAYERBOT_AI(bot)->SayToGuild(responseMessage);
++            sent = botAI->SayToGuild(responseMessage);
++            break;
++        }
++        case ChatChannelSource::SRC_PARTY:
++        {
++            if (sPlayerbotAIConfig.livingAzerothChatEnabled)
++                sent = botAI->SayToParty(responseMessage);
++            break;
++        }
++        case ChatChannelSource::SRC_RAID:
++        {
++            if (sPlayerbotAIConfig.livingAzerothChatEnabled)
++                sent = botAI->SayToRaid(responseMessage);
+             break;
+         }
+         default:
+             break;
+     }
+-    GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 25));
++    if (sPlayerbotAIConfig.livingAzerothChatEnabled)
++    {
++        if (sent)
++            SetChatReplyCooldown(bot, 25);
++        return sent;
++    }
+ 
++    SetChatReplyCooldown(bot, 25);
+     return true;
+ }
+ 
+diff --git a/src/Ai/World/Rpg/Action/NewRpgBaseAction.cpp b/src/Ai/World/Rpg/Action/NewRpgBaseAction.cpp
+index f1eb0d7..4b2d488 100644
+--- a/src/Ai/World/Rpg/Action/NewRpgBaseAction.cpp
++++ b/src/Ai/World/Rpg/Action/NewRpgBaseAction.cpp
+@@ -8,6 +8,8 @@
+ #include "GossipDef.h"
+ #include "GridTerrainData.h"
+ #include "IVMapMgr.h"
++#include "Map.h"
++#include "MapMgr.h"
+ #include "NewRpgInfo.h"
+ #include "NewRpgStrategy.h"
+ #include "Object.h"
+@@ -37,6 +39,31 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
+     if (dest == WorldPosition())
+         return false;
+ 
++    if (!MapMgr::IsValidMapCoord(dest))
++    {
++        bool const canRepairHeight = dest.GetMapId() == bot->GetMapId() &&
++            Acore::IsValidMapCoord(dest.GetPositionX(), dest.GetPositionY()) &&
++            (!Acore::IsValidMapCoord(dest.GetPositionZ()) || dest.GetPositionZ() <= INVALID_HEIGHT);
++        if (!canRepairHeight)
++        {
++            LOG_WARN("playerbots", "[New RPG] result=invalid_destination_rejected bot_guid={} map_id={}",
++                bot->GetGUID().GetCounter(), dest.GetMapId());
++            return false;
++        }
++
++        float const repairedZ = bot->GetMap()->GetHeight(dest.GetPositionX(), dest.GetPositionY(), MAX_HEIGHT);
++        if (!Acore::IsValidMapCoord(repairedZ) || repairedZ <= INVALID_HEIGHT)
++        {
++            LOG_WARN("playerbots", "[New RPG] result=invalid_destination_height_unresolved bot_guid={} map_id={}",
++                bot->GetGUID().GetCounter(), dest.GetMapId());
++            return false;
++        }
++
++        dest.setZ(repairedZ + 0.05f);
++        LOG_INFO("playerbots", "[New RPG] result=destination_height_repaired bot_guid={} map_id={}",
++            bot->GetGUID().GetCounter(), dest.GetMapId());
++    }
++
+     if (dest != botAI->rpgInfo.moveFarPos)
+     {
+         // clear stuck information if it's a new dest
+diff --git a/src/Bot/PlayerLocalPopulationPolicy.h b/src/Bot/PlayerLocalPopulationPolicy.h
+new file mode 100644
+index 0000000..7d16b05
+--- /dev/null
++++ b/src/Bot/PlayerLocalPopulationPolicy.h
+@@ -0,0 +1,150 @@
++/*
++ * Living Azeroth player-local and adaptive level-cohort population policy.
++ * Side-effect-free helpers; all game-object work stays on the world thread.
++ */
++#ifndef PLAYERBOTS_PLAYERLOCALPOPULATIONPOLICY_H
++#define PLAYERBOTS_PLAYERLOCALPOPULATIONPOLICY_H
++
++#include <algorithm>
++#include <cstddef>
++#include <cstdint>
++
++namespace PlayerLocalPopulation
++{
++struct CandidateState
++{
++    bool randomBot = false;
++    bool sameFaction = false;
++    bool inWorld = false;
++    bool alive = false;
++    bool overworld = false;
++    bool teleporting = false;
++    bool rooted = false;
++    bool inCombat = false;
++    bool grouped = false;
++    bool inLfg = false;
++    bool inBattleground = false;
++    bool onTransport = false;
++    bool visibleAtSource = false;
++    bool coolingDown = false;
++    bool recentlyInteracted = false;
++    bool explicitlyProtected = false;
++};
++
++inline bool IsEligible(CandidateState const& state)
++{
++    return state.randomBot && state.sameFaction && state.inWorld && state.alive && state.overworld &&
++           !state.teleporting && !state.rooted && !state.inCombat && !state.grouped && !state.inLfg &&
++           !state.inBattleground && !state.onTransport && !state.visibleAtSource && !state.coolingDown &&
++           !state.recentlyInteracted && !state.explicitlyProtected;
++}
++
++inline std::uint32_t LevelDelta(std::uint32_t first, std::uint32_t second)
++{
++    return first > second ? first - second : second - first;
++}
++
++inline bool IsLevelMatched(std::uint32_t botLevel, std::uint32_t playerLevel, std::uint32_t maximumDelta)
++{
++    return LevelDelta(botLevel, playerLevel) <= maximumDelta;
++}
++
++inline bool CanPromote(std::uint32_t botLevel, std::uint32_t playerLevel, std::uint32_t maximumLevel)
++{
++    return botLevel < playerLevel && playerLevel <= maximumLevel;
++}
++
++inline std::uint32_t PromotionLevel(std::uint32_t playerLevel, std::uint32_t botId,
++                                    std::uint32_t preferredDelta, std::uint32_t maximumLevel)
++{
++    std::int32_t spread = static_cast<std::int32_t>(preferredDelta);
++    std::int32_t width = spread * 2 + 1;
++    std::int32_t offset = width > 0 ? static_cast<std::int32_t>(botId % width) - spread : 0;
++    std::int32_t desired = static_cast<std::int32_t>(playerLevel) + offset;
++    return static_cast<std::uint32_t>(std::clamp(desired, 1, static_cast<std::int32_t>(maximumLevel)));
++}
++
++inline std::uint32_t RelocationBudget(std::uint32_t nearby, std::uint32_t target,
++                                      std::uint32_t maximumPerCycle)
++{
++    return nearby >= target ? 0 : std::min(target - nearby, maximumPerCycle);
++}
++
++struct LevelWindow
++{
++    std::uint32_t lower = 1;
++    std::uint32_t upper = 1;
++
++    bool Contains(std::uint32_t level) const
++    {
++        return level >= lower && level <= upper;
++    }
++};
++
++inline LevelWindow AdaptiveLevelWindow(std::uint32_t playerLevel, std::uint32_t maximumLevel,
++                                       std::uint32_t windowLevels, std::uint32_t lowerSlack)
++{
++    maximumLevel = std::max<std::uint32_t>(1, maximumLevel);
++    windowLevels = std::clamp<std::uint32_t>(windowLevels, 1, maximumLevel);
++    playerLevel = std::clamp<std::uint32_t>(playerLevel, 1, maximumLevel);
++    std::uint32_t latestStart = maximumLevel - windowLevels + 1;
++    std::uint32_t desiredStart = playerLevel > lowerSlack ? playerLevel - lowerSlack : 1;
++    std::uint32_t lower = std::clamp<std::uint32_t>(desiredStart, 1, latestStart);
++    return {lower, lower + windowLevels - 1};
++}
++
++inline std::uint32_t CohortTarget(std::uint32_t onlineBots, std::uint32_t percent)
++{
++    percent = std::min<std::uint32_t>(percent, 100);
++    return (onlineBots * percent + 99) / 100;
++}
++
++inline std::size_t AnchorIndex(std::size_t cohortSlot, std::size_t playerCount)
++{
++    return playerCount ? cohortSlot % playerCount : 0;
++}
++
++inline std::uint32_t SpreadLevel(std::uint32_t lower, std::uint32_t upper, std::size_t ordinal)
++{
++    if (lower >= upper)
++        return lower;
++    return lower + static_cast<std::uint32_t>(ordinal % (static_cast<std::size_t>(upper - lower) + 1));
++}
++
++inline std::uint32_t CohortLevel(LevelWindow window, std::uint32_t playerLevel, std::size_t ordinal)
++{
++    playerLevel = std::clamp(playerLevel, window.lower, window.upper);
++    std::size_t bucket = ordinal % 20;
++
++    // 60% peers, 25% near-future players, 15% lower/background players.
++    if (bucket < 12)
++    {
++        std::uint32_t lower = playerLevel > 4 ? playerLevel - 4 : window.lower;
++        lower = std::max(lower, window.lower);
++        std::uint32_t upper = std::min(window.upper, playerLevel + 5);
++        return SpreadLevel(lower, upper, ordinal);
++    }
++    if (bucket < 17)
++    {
++        std::uint32_t lower = std::min(window.upper, playerLevel + 6);
++        if (lower <= window.upper && lower > playerLevel)
++            return SpreadLevel(lower, window.upper, ordinal);
++    }
++    else if (playerLevel > window.lower)
++    {
++        std::uint32_t upper = playerLevel > 5 ? playerLevel - 5 : window.lower;
++        upper = std::min(upper, window.upper);
++        if (upper >= window.lower)
++            return SpreadLevel(window.lower, upper, ordinal);
++    }
++    return SpreadLevel(window.lower, window.upper, ordinal);
++}
++
++inline std::uint32_t CohortMutationBudget(std::uint32_t matched, std::uint32_t target,
++                                          std::uint32_t maximumPerCycle)
++{
++    return matched >= target ? 0 : std::min(target - matched, maximumPerCycle);
++}
++}
++
++#endif
+diff --git a/src/Bot/PlayerbotAI.cpp b/src/Bot/PlayerbotAI.cpp
+index 5b68216..f8ebc6d 100644
+--- a/src/Bot/PlayerbotAI.cpp
++++ b/src/Bot/PlayerbotAI.cpp
+@@ -27,6 +27,9 @@
+ #include "GuildMgr.h"
+ #include "LFGMgr.h"
+ #include "LastMovementValue.h"
++#include "LfgActions.h"
++#include "LfgLifecycleGuard.h"
++#include "LivingAzerothChat.h"
+ #include "LastSpellCastValue.h"
+ #include "LogLevelAction.h"
+ #include "LootObjectStack.h"
+@@ -794,6 +797,57 @@ void PlayerbotAI::HandleTeleportAck()
+         if (sPlayerbotAIConfig.applyInstanceStrategies)
+             ApplyInstanceStrategies(bot->GetMapId(), true);
+ 
++        if (bot->GetMap() && bot->GetMap()->IsDungeon())
++        {
++            LOG_INFO("playerbots",
++                     "Living Azeroth LFG instance-entry result=entered bot={} map={} instance={} group={}",
++                     bot->GetGUID().GetCounter(), bot->GetMapId(), bot->GetInstanceId(),
++                     bot->GetGroup() ? bot->GetGroup()->GetGUID().GetCounter() : 0);
++            Group* group = bot->GetGroup();
++            if (group && group->isLFGGroup())
++            {
++                uint32 const dungeonId = sLFGMgr->GetDungeon(group->GetGUID());
++                lfg::LFGDungeonData const* dungeon = dungeonId ? sLFGMgr->GetLFGDungeon(dungeonId) : nullptr;
++                if (dungeon)
++                {
++                    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
++                    {
++                        Player* member = ref->GetSource();
++                        PlayerbotAI* memberAI = member ? PlayerbotsMgr::instance().GetPlayerbotAI(member) : nullptr;
++                        bool const sameInstance = member && member->GetMapId() == bot->GetMapId() &&
++                                                  member->GetInstanceId() == bot->GetInstanceId();
++                        PlayerbotLfgLifecycle::CompanionCatchupDecision const catchupDecision =
++                            PlayerbotLfgLifecycle::EvaluateCompanionCatchup(member != nullptr, member == bot,
++                                memberAI != nullptr, memberAI && memberAI->IsRealPlayer(), member && member->IsAlive(),
++                                sameInstance, member && member->IsBeingTeleported());
++                        if (catchupDecision != PlayerbotLfgLifecycle::CompanionCatchupDecision::Attempt)
++                        {
++                            LOG_DEBUG("playerbots",
++                                      "Living Azeroth LFG instance-catchup result={} bot={} anchor={} group={} dungeon={}",
++                                      PlayerbotLfgLifecycle::ToString(catchupDecision),
++                                      member ? member->GetGUID().GetCounter() : 0, bot->GetGUID().GetCounter(),
++                                      group->GetGUID().GetCounter(), dungeonId);
++                            continue;
++                        }
++                        if (!NormalizePlayerbotForLfgTeleport(member))
++                        {
++                            LOG_WARN("playerbots",
++                                     "Living Azeroth LFG instance-catchup result=rejected_normalization bot={} anchor={} group={} dungeon={}",
++                                     member->GetGUID().GetCounter(), bot->GetGUID().GetCounter(),
++                                     group->GetGUID().GetCounter(), dungeonId);
++                            continue;
++                        }
++                        sLFGMgr->TeleportPlayer(member, false);
++                        LOG_INFO("playerbots",
++                                 "Living Azeroth LFG instance-catchup result={} bot={} anchor={} group={} dungeon={}",
++                                 member->IsBeingTeleported() ? "accepted" : "rejected_after_normalization",
++                                 member->GetGUID().GetCounter(), bot->GetGUID().GetCounter(),
++                                 group->GetGUID().GetCounter(), dungeonId);
++                    }
++                }
++            }
++        }
++
+         if (sPlayerbotAIConfig.restrictHealerDPS)
+             EvaluateHealerDpsStrategy();
+ 
+@@ -1163,7 +1217,7 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+         }
+         case SMSG_MESSAGECHAT:  // do not react to self or if not ready to reply
+         {
+-            if (!sPlayerbotAIConfig.randomBotTalk)
++            if (!sPlayerbotAIConfig.randomBotTalk && !sPlayerbotAIConfig.livingAzerothChatEnabled)
+                 return;
+ 
+             if (!AllowActivity())
+@@ -1211,7 +1265,9 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+                         return;
+                 }
+ 
+-                if (chanName == "World")
++                if (chanName == "World" &&
++                    (!sPlayerbotAIConfig.livingAzerothChatEnabled ||
++                     !sPlayerbotAIConfig.livingAzerothChatReplyToWorld))
+                     return;
+ 
+                 // do not reply to self but always try to reply to real player
+@@ -1223,12 +1279,20 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+                     sCharacterCache->GetCharacterNameByGuid(guid1, name);
+                     uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guid1);
+                     isFromFreeBot = sPlayerbotAIConfig.IsInRandomAccountList(accountId);
+-                    bool isMentioned = message.find(bot->GetName()) != std::string::npos;
++                    std::string const normalizedMessage = LivingAzerothChat::Normalize(message);
++                    std::string const normalizedBotName = LivingAzerothChat::Normalize(bot->GetName());
++                    bool const isMentioned = sPlayerbotAIConfig.livingAzerothChatEnabled
++                                                 ? LivingAzerothChat::ContainsToken(
++                                                       normalizedMessage, normalizedBotName)
++                                                 : message.find(bot->GetName()) != std::string::npos;
++                    bool const isDirect = msgtype == CHAT_MSG_WHISPER || isMentioned;
+ 
+                     // ChatChannelSource chatChannelSource = GetChatChannelSource(bot, msgtype, chanName);
+ 
+                     // random bot speaks, chat CD
+-                    if (isFromFreeBot && isPaused)
++                    if (sPlayerbotAIConfig.livingAzerothChatEnabled && isPaused)
++                        return;
++                    if (!sPlayerbotAIConfig.livingAzerothChatEnabled && isFromFreeBot && isPaused)
+                         return;
+ 
+                     // BG: react only if mentioned or if not channel and real player spoke
+@@ -1238,43 +1302,94 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
+                     if (HasRealPlayerMaster() && guid1 != GetMaster()->GetGUID())
+                         return;
+ 
++                    if (sPlayerbotAIConfig.livingAzerothChatEnabled && LivingAzerothChat::IsCommand(message))
++                        return;
++
+                     auto itemIds = GetChatHelper()->ExtractAllItemIds(message);
+-                    if (message.starts_with(sPlayerbotAIConfig.toxicLinksPrefix) &&
++                    if (!sPlayerbotAIConfig.livingAzerothChatEnabled &&
++                        message.starts_with(sPlayerbotAIConfig.toxicLinksPrefix) &&
+                         (itemIds.size() > 0 || GetChatHelper()->ExtractAllQuestIds(message).size() > 0) &&
+                         sPlayerbotAIConfig.toxicLinksRepliesChance)
+                     {
+                         if (urand(0, 50) > 0 || urand(1, 100) > sPlayerbotAIConfig.toxicLinksRepliesChance)
+                             return;
+                     }
+-                    else if (itemIds.count(19019) && sPlayerbotAIConfig.thunderfuryRepliesChance)
++                    else if (!sPlayerbotAIConfig.livingAzerothChatEnabled && itemIds.count(19019) &&
++                             sPlayerbotAIConfig.thunderfuryRepliesChance)
+                     {
+                         if (urand(0, 60) > 0 || urand(1, 100) > sPlayerbotAIConfig.thunderfuryRepliesChance)
+                             return;
+                     }
+                     else
+                     {
+-                        if (isFromFreeBot && urand(0, 20))
+-                            return;
+-
+-                        // if (msgtype == CHAT_MSG_GUILD && (!sPlayerbotAIConfig.guildRepliesRate || urand(1, 100) >=
+-                        // sPlayerbotAIConfig.guildRepliesRate)) return;
+-
+-                        if (!isFromFreeBot)
++                        if (sPlayerbotAIConfig.livingAzerothChatEnabled)
+                         {
+-                            if (!isMentioned && urand(0, 4))
++                            if (chatReplies.size() >= 4)
+                                 return;
++
++                            uint32 const replyChance =
++                                isFromFreeBot ? sPlayerbotAIConfig.livingAzerothChatBotChance
++                                              : (isDirect
++                                                     ? sPlayerbotAIConfig.livingAzerothChatAddressedChance
++                                                     : sPlayerbotAIConfig.livingAzerothChatUnaddressedChance);
++                            if (!replyChance || urand(1, 100) > replyChance)
++                                return;
++
++                            if (isDirect)
++                            {
++                                std::ostringstream pairKey;
++                                pairKey << "pair|" << bot->GetName() << '|' << guid1.ToString();
++                                if (!LivingAzerothChat::ReplyArbiter::TryClaim(
++                                        pairKey.str(), time(nullptr), sPlayerbotAIConfig.livingAzerothChatCooldownMin))
++                                    return;
++                            }
++                            else
++                            {
++                                std::ostringstream messageKey;
++                                messageKey << "message|" << guid1.ToString() << '|'
++                                           << static_cast<uint32>(msgtype) << '|' << chanName << '|'
++                                           << normalizedMessage;
++                                if (!LivingAzerothChat::ReplyArbiter::TryClaim(
++                                        messageKey.str(), time(nullptr),
++                                        sPlayerbotAIConfig.livingAzerothChatClaimTtl))
++                                    return;
++                            }
+                         }
+                         else
+                         {
+-                            if (urand(0, 20 + 10 * isMentioned))
++                            if (isFromFreeBot && urand(0, 20))
++                                return;
++
++                            // if (msgtype == CHAT_MSG_GUILD && (!sPlayerbotAIConfig.guildRepliesRate ||
++                            // urand(1, 100) >= sPlayerbotAIConfig.guildRepliesRate)) return;
++
++                            if (!isFromFreeBot)
++                            {
++                                if (!isMentioned && urand(0, 4))
++                                    return;
++                            }
++                            else if (urand(0, 20 + 10 * isMentioned))
+                                 return;
+                         }
+                     }
+ 
+-                    QueueChatResponse(ChatQueuedReply{msgtype, guid1.GetCounter(), guid2.GetCounter(), message,
+-                                                      chanName, name,
+-                                                      time(nullptr) + urand(inCombat ? 10 : 5, inCombat ? 25 : 15)});
+-                    GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 25));
++                    if (sPlayerbotAIConfig.livingAzerothChatEnabled)
++                    {
++                        time_t const now = time(nullptr);
++                        time_t const replyAt = now + urand(sPlayerbotAIConfig.livingAzerothChatDelayMin,
++                                                          sPlayerbotAIConfig.livingAzerothChatDelayMax);
++                        QueueChatResponse(ChatQueuedReply{msgtype, guid1.GetCounter(), guid2.GetCounter(), message,
++                                                          chanName, name, replyAt});
++                        GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(replyAt);
++                    }
++                    else
++                    {
++                        QueueChatResponse(ChatQueuedReply{msgtype, guid1.GetCounter(), guid2.GetCounter(), message,
++                                                          chanName, name,
++                                                          time(nullptr) +
++                                                              urand(inCombat ? 10 : 5, inCombat ? 25 : 15)});
++                        GetAiObjectContext()->GetValue<time_t>("last said", "chat")->Set(time(0) + urand(5, 25));
++                    }
+                     return;
+                 }
+             }
+@@ -2788,22 +2903,29 @@ std::vector<Player*> PlayerbotAI::GetAllPlayersInGroup()
+     return members;
+ }
+ 
+-bool PlayerbotAI::SayToGuild(const std::string& msg)
++bool PlayerbotAI::SayToGuild(const std::string& msg, bool officerOnly)
+ {
+     if (msg.empty())
+     {
+         return false;
+     }
+ 
++    WorldSession* session = bot->GetSession();
++    if (!session)
++    {
++        return false;
++    }
++
+     if (bot->GetGuildId())
+     {
+         if (Guild* guild = sGuildMgr->GetGuildById(bot->GetGuildId()))
+         {
+-            if (!guild->HasRankRight(bot, GR_RIGHT_GCHATSPEAK))
++            uint32 requiredRight = officerOnly ? GR_RIGHT_OFFCHATSPEAK : GR_RIGHT_GCHATSPEAK;
++            if (!guild->HasRankRight(bot, requiredRight))
+             {
+                 return false;
+             }
+-            guild->BroadcastToGuild(bot->GetSession(), false, msg.c_str(), LANG_UNIVERSAL);
++            guild->BroadcastToGuild(session, officerOnly, msg.c_str(), LANG_UNIVERSAL);
+             return true;
+         }
+     }
+diff --git a/src/Bot/PlayerbotAI.h b/src/Bot/PlayerbotAI.h
+index bc95266..cd31637 100644
+--- a/src/Bot/PlayerbotAI.h
++++ b/src/Bot/PlayerbotAI.h
+@@ -465,7 +465,7 @@ public:
+     bool TellMasterNoFacing(std::string const text,
+                             PlayerbotSecurityLevel securityLevel = PLAYERBOT_SECURITY_ALLOW_ALL);
+     bool TellError(std::string const text, PlayerbotSecurityLevel securityLevel = PLAYERBOT_SECURITY_ALLOW_ALL);
+-    bool SayToGuild(const std::string& msg);
++    bool SayToGuild(const std::string& msg, bool officerOnly = false);
+     bool SayToWorld(const std::string& msg);
+     bool SayToChannel(const std::string& msg, const ChatChannelId& chanId);
+     bool SayToParty(const std::string& msg);
+diff --git a/src/Bot/RandomPlayerbotMgr.cpp b/src/Bot/RandomPlayerbotMgr.cpp
+index 6abae47..8f2b1ba 100644
+--- a/src/Bot/RandomPlayerbotMgr.cpp
++++ b/src/Bot/RandomPlayerbotMgr.cpp
+@@ -26,6 +26,7 @@
+ #include "FleeManager.h"
+ #include "GridNotifiers.h"
+ #include "LFGMgr.h"
++#include "LfgLifecycleGuard.h"
+ #include "MapMgr.h"
+ #include "NewRpgInfo.h"
+ #include "NewRpgStrategy.h"
+@@ -35,6 +36,7 @@
+ #include "PlayerbotAI.h"
+ #include "PlayerbotAIConfig.h"
+ #include "PlayerbotFactory.h"
++#include "PlayerLocalPopulationPolicy.h"
+ #include "PlayerbotTextMgr.h"
+ #include "Playerbots.h"
+ #include "Position.h"
+@@ -90,6 +92,33 @@ void activateCheckPlayersThread()
+     t.detach();
+ }
+ 
++namespace
++{
++bool PreservePlayerGroupFromAmbientRecovery(Player* bot)
++{
++    Group* group = bot ? bot->GetGroup() : nullptr;
++    if (!group)
++        return false;
++
++    bool hasLoadedRealPlayer = false;
++    for (GroupReference* reference = group->GetFirstMember(); reference; reference = reference->next())
++    {
++        Player* member = reference->GetSource();
++        if (member && !sRandomPlayerbotMgr.IsRandomBot(member))
++        {
++            hasLoadedRealPlayer = true;
++            break;
++        }
++    }
++
++    ObjectGuid leaderGuid = group->GetLeaderGUID();
++    bool leaderKnown = !leaderGuid.IsEmpty();
++    bool leaderIsRandomBot = leaderKnown && sRandomPlayerbotMgr.IsRandomBot(leaderGuid.GetCounter());
++    return PlayerbotLfgLifecycle::PreserveGroupFromAmbientRecovery(
++        true, group->isLFGGroup(), leaderKnown, leaderIsRandomBot, hasLoadedRealPlayer);
++}
++}
++
+ class botPIDImpl
+ {
+ public:
+@@ -378,6 +407,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
+             sRandomPlayerbotMgr.CheckPlayers();
+     }
+ 
++    if (sPlayerbotAIConfig.playerLocalPopulationEnabled && !players.empty() &&
++        time(nullptr) >= PlayerLocalPopulationTimer + sPlayerbotAIConfig.playerLocalPopulationCheckIntervalSeconds)
++    {
++        UpdatePlayerLocalPopulation();
++    }
++
++    if (sPlayerbotAIConfig.adaptiveLevelCohortEnabled && !players.empty() &&
++        time(nullptr) >= AdaptiveLevelCohortTimer + sPlayerbotAIConfig.adaptiveLevelCohortCheckIntervalSeconds)
++    {
++        UpdateAdaptiveLevelCohort();
++    }
++
+     if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
+     {
+         if (time(nullptr) > (BgCheckTimer + 35))
+@@ -538,11 +579,24 @@ void RandomPlayerbotMgr::AssignAccountTypes()
+         }
+     }
+ 
++    // Release account reservations when their configured pool is disabled.
++    for (auto& [accountId, accountType] : currentAssignments)
++    {
++        bool releaseRndBot = accountType == 1 && sPlayerbotAIConfig.maxRandomBots == 0;
++        bool releaseAddClass = accountType == 2 && sPlayerbotAIConfig.addClassAccountPoolSize == 0;
++        if (!releaseRndBot && !releaseAddClass)
++            continue;
++
++        PlayerbotsDatabase.Execute(
++            "UPDATE playerbots_account_type SET account_type = 0, assignment_date = NOW() WHERE account_id = {}",
++            accountId);
++        accountType = 0;
++    }
++
+     // Calculate needed RNDbot accounts
+     uint32 neededRndBotAccounts = 0;
+     if (sPlayerbotAIConfig.maxRandomBots > 0)
+     {
+-        int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+         int maxBots = sPlayerbotAIConfig.maxRandomBots;
+ 
+         // Take periodic online-offline into account
+@@ -551,8 +605,8 @@ void RandomPlayerbotMgr::AssignAccountTypes()
+             maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
+         }
+ 
+-        // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
+-        neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
++        // A game account can have only one active character, so each concurrent RNDbot needs a unique account.
++        neededRndBotAccounts = maxBots;
+     }
+ 
+     // Count existing assigned accounts
+@@ -723,6 +777,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
+         // Separate characters by faction for phased login
+         std::vector<CharacterInfo> allianceChars;
+         std::vector<CharacterInfo> hordeChars;
++        std::unordered_set<uint32> selectedAccounts;
++
++        for (uint32 bot : currentBots)
++        {
++            ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(bot);
++            uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guid);
++            if (accountId)
++                selectedAccounts.insert(accountId);
++        }
+ 
+         for (auto const& charInfo : allCharacters)
+         {
+@@ -736,7 +799,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
+         // Lambda to handle bot login logic
+         auto tryLoginBot = [&](const CharacterInfo& charInfo) -> bool
+         {
+-            if (GetEventValue(charInfo.guid, "add") ||
++            if (selectedAccounts.contains(charInfo.accountId) ||
++                GetEventValue(charInfo.guid, "add") ||
+                 GetEventValue(charInfo.guid, "logout") ||
+                 GetPlayerBot(charInfo.guid) ||
+                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
+@@ -753,6 +817,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
+             SetEventValue(charInfo.guid, "add", 1, add_time);
+             SetEventValue(charInfo.guid, "logout", 0, 0);
+             currentBots.push_back(charInfo.guid);
++            selectedAccounts.insert(charInfo.accountId);
+ 
+             return true;
+         };
+@@ -1314,6 +1379,363 @@ void RandomPlayerbotMgr::CheckPlayers()
+     LOG_INFO("playerbots", "Max player level is {}, max bot level set to {}", playersLevel - 3, playersLevel);
+ }
+ 
++bool RandomPlayerbotMgr::RelocateBotNearPlayer(Player* bot, Player* player)
++{
++    if (!bot || !player || !bot->IsInWorld() || !player->IsInWorld() || !player->GetMap())
++        return false;
++
++    WorldPosition playerPosition(player);
++    uint32 playerZone = player->GetZoneId();
++    float minimumDistance = static_cast<float>(sPlayerbotAIConfig.playerLocalPopulationMinimumArrivalDistance);
++    float maximumDistance = static_cast<float>(sPlayerbotAIConfig.playerLocalPopulationMaximumArrivalDistance);
++
++    for (uint32 attempt = 0; attempt < sPlayerbotAIConfig.playerLocalPopulationSafeArrivalAttempts; ++attempt)
++    {
++        WorldPosition destination(playerPosition);
++        float radius = frand(minimumDistance, maximumDistance);
++        if (!destination.GetReachableRandomPointOnGround(player, radius, false) || !destination.IsValid() ||
++            destination.isInWater() || destination.GetMapId() != player->GetMapId())
++            continue;
++
++        uint32 destinationZone = player->GetMap()->GetZoneId(player->GetPhaseMask(), destination.GetPositionX(),
++                                                              destination.GetPositionY(), destination.GetPositionZ());
++        if (destinationZone != playerZone)
++            continue;
++
++        bool visibleArrival = false;
++        for (Player* realPlayer : players)
++        {
++            if (!realPlayer || !realPlayer->IsInWorld() || realPlayer->GetMapId() != destination.GetMapId())
++                continue;
++
++            if (destination.sqDistance2d(WorldPosition(realPlayer)) < minimumDistance * minimumDistance)
++            {
++                visibleArrival = true;
++                break;
++            }
++        }
++        if (visibleArrival)
++            continue;
++
++        bot->GetMotionMaster()->Clear();
++        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
++            botAI->Reset(true);
++        bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
++        bot->TeleportTo(destination.GetMapId(), destination.GetPositionX(), destination.GetPositionY(),
++                        destination.GetPositionZ(), destination.GetOrientation());
++        bot->SendMovementFlagUpdate();
++        return true;
++    }
++
++    return false;
++}
++
++void RandomPlayerbotMgr::UpdateAdaptiveLevelCohort()
++{
++    using namespace PlayerLocalPopulation;
++
++    time_t now = time(nullptr);
++    AdaptiveLevelCohortTimer = now;
++
++    std::vector<Player*> realPlayers;
++    for (Player* player : players)
++    {
++        if (player && player->IsInWorld() && player->IsAlive() && !player->IsGameMaster() &&
++            !player->IsBeingTeleported())
++            realPlayers.push_back(player);
++    }
++    std::sort(realPlayers.begin(), realPlayers.end(), [](Player* left, Player* right)
++              { return left->GetGUID().GetCounter() < right->GetGUID().GetCounter(); });
++
++    std::vector<Player*> bots;
++    bots.reserve(playerBots.size());
++    for (auto const& [guid, bot] : playerBots)
++        if (bot)
++            bots.push_back(bot);
++    std::sort(bots.begin(), bots.end(), [](Player* left, Player* right)
++              { return left->GetGUID().GetCounter() < right->GetGUID().GetCounter(); });
++
++    if (realPlayers.empty() || bots.empty())
++    {
++        LOG_INFO("playerbots", "LA24_LEVEL_COHORT action=skip humans={} online_bots={}",
++                 realPlayers.size(), bots.size());
++        return;
++    }
++
++    uint32 target = CohortTarget(static_cast<uint32>(bots.size()),
++                                 sPlayerbotAIConfig.adaptiveLevelCohortTargetPercent);
++    target = std::min<uint32>(target, static_cast<uint32>(bots.size()));
++
++    struct Candidate
++    {
++        Player* bot;
++        Player* anchor;
++        LevelWindow window;
++        uint32 desiredLevel;
++        size_t slot;
++    };
++    std::vector<Candidate> candidates;
++    uint32 matched = 0;
++
++    for (size_t slot = 0; slot < target; ++slot)
++    {
++        Player* bot = bots[slot];
++        Player* anchor = realPlayers[AnchorIndex(slot, realPlayers.size())];
++        LevelWindow window = AdaptiveLevelWindow(anchor->GetLevel(), DEFAULT_MAX_LEVEL,
++            sPlayerbotAIConfig.adaptiveLevelCohortWindowLevels,
++            sPlayerbotAIConfig.adaptiveLevelCohortLowerSlack);
++        if (window.Contains(bot->GetLevel()))
++        {
++            ++matched;
++            continue;
++        }
++
++        bool visibleAtSource = false;
++        if (bot->IsInWorld())
++        {
++            WorldPosition botPosition(bot);
++            float visibilityDistance = static_cast<float>(sPlayerbotAIConfig.BotActiveAloneForceWhenInRadius);
++            for (Player* realPlayer : realPlayers)
++            {
++                if (realPlayer->GetMapId() == bot->GetMapId() &&
++                    botPosition.sqDistance2d(WorldPosition(realPlayer)) < visibilityDistance * visibilityDistance)
++                {
++                    visibleAtSource = true;
++                    break;
++                }
++            }
++        }
++
++        uint32 botId = bot->GetGUID().GetCounter();
++        CandidateState state;
++        state.randomBot = IsRandomBot(bot);
++        state.sameFaction = true;
++        state.inWorld = bot->IsInWorld();
++        state.alive = bot->IsAlive();
++        state.overworld = bot->GetMap() && !bot->GetMap()->IsDungeon() &&
++                          !bot->GetMap()->IsBattlegroundOrArena();
++        state.teleporting = bot->IsBeingTeleported();
++        state.rooted = bot->IsRooted();
++        state.inCombat = bot->IsInCombat();
++        state.grouped = bot->GetGroup() != nullptr;
++        state.inLfg = sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE;
++        state.inBattleground = bot->InBattlegroundQueue() || bot->InBattleground() || bot->InArena();
++        state.onTransport = bot->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
++        state.visibleAtSource = visibleAtSource;
++        auto adaptiveCooldown = adaptiveLevelCohortCooldown.find(botId);
++        auto localCooldown = playerLocalRelocationCooldown.find(botId);
++        state.coolingDown =
++            (adaptiveCooldown != adaptiveLevelCohortCooldown.end() && adaptiveCooldown->second > now) ||
++            (localCooldown != playerLocalRelocationCooldown.end() && localCooldown->second > now);
++
++        if (IsEligible(state))
++            candidates.push_back({bot, anchor, window,
++                CohortLevel(window, anchor->GetLevel(), slot), slot});
++    }
++
++    uint32 budget = CohortMutationBudget(matched, target,
++        sPlayerbotAIConfig.adaptiveLevelCohortMaxChangesPerCycle);
++    uint32 changed = 0;
++    for (Candidate const& candidate : candidates)
++    {
++        if (!budget)
++            break;
++
++        Player* bot = candidate.bot;
++        uint32 botId = bot->GetGUID().GetCounter();
++        uint32 oldLevel = bot->GetLevel();
++        PlayerbotFactory(bot, candidate.desiredLevel).Randomize(true);
++        adaptiveLevelCohortCooldown[botId] =
++            now + sPlayerbotAIConfig.adaptiveLevelCohortChangeCooldownSeconds;
++        playerLocalRelocationCooldown[botId] =
++            now + sPlayerbotAIConfig.adaptiveLevelCohortChangeCooldownSeconds;
++        --budget;
++        ++changed;
++
++        LOG_INFO("playerbots",
++                 "LA24_LEVEL_COHORT action=level_change bot={} old_level={} new_level={} "
++                 "anchor_player={} anchor_level={} window={}-{} slot={} cooldown_seconds={}",
++                 bot->GetName(), oldLevel, bot->GetLevel(), candidate.anchor->GetName(),
++                 candidate.anchor->GetLevel(), candidate.window.lower, candidate.window.upper,
++                 candidate.slot, sPlayerbotAIConfig.adaptiveLevelCohortChangeCooldownSeconds);
++    }
++
++    LOG_INFO("playerbots",
++             "LA24_LEVEL_COHORT action=summary humans={} online_bots={} target={} matched={} "
++             "eligible={} changed={} remaining_gap={}",
++             realPlayers.size(), bots.size(), target, matched, candidates.size(), changed,
++             target > matched + changed ? target - matched - changed : 0);
++}
++void RandomPlayerbotMgr::UpdatePlayerLocalPopulation()
++{
++    using namespace PlayerLocalPopulation;
++
++    PlayerLocalPopulationTimer = time(nullptr);
++    uint32 relocationsRemaining = sPlayerbotAIConfig.playerLocalPopulationMaxRelocationsPerCycle;
++    uint32 totalRelocated = 0;
++    uint32 totalPromoted = 0;
++
++    std::vector<Player*> realPlayers;
++    for (Player* player : players)
++    {
++        if (player && player->IsInWorld() && player->IsAlive() && !player->IsGameMaster() &&
++            !player->IsBeingTeleported() && player->GetMap() && !player->GetMap()->IsDungeon() &&
++            !player->GetMap()->IsBattlegroundOrArena())
++            realPlayers.push_back(player);
++    }
++    std::sort(realPlayers.begin(), realPlayers.end(), [](Player* left, Player* right)
++              { return left->GetGUID().GetCounter() < right->GetGUID().GetCounter(); });
++
++    std::unordered_set<uint32> usedBots;
++    for (Player* player : realPlayers)
++    {
++        WorldPosition playerPosition(player);
++        float maximumDistance = static_cast<float>(sPlayerbotAIConfig.playerLocalPopulationMaximumArrivalDistance);
++        uint32 nearby = 0;
++
++        struct Candidate
++        {
++            Player* bot;
++            bool matched;
++            uint32 levelDelta;
++        };
++        std::vector<Candidate> candidates;
++
++        for (auto const& [guid, bot] : playerBots)
++        {
++            if (!bot)
++                continue;
++
++            uint32 botId = guid.GetCounter();
++            bool sameMap = bot->IsInWorld() && bot->GetMapId() == player->GetMapId();
++            bool sameZone = sameMap && bot->GetZoneId() == player->GetZoneId();
++            bool sameFaction = bot->GetTeamId() == player->GetTeamId();
++            bool matched = IsLevelMatched(bot->GetLevel(), player->GetLevel(),
++                                          sPlayerbotAIConfig.playerLocalPopulationMaximumLevelDelta);
++            bool nearbyBot = sameFaction && sameZone && matched && !bot->GetGroup() &&
++                             playerPosition.sqDistance2d(WorldPosition(bot)) <= maximumDistance * maximumDistance;
++            if (nearbyBot)
++                ++nearby;
++
++            bool visibleAtSource = false;
++            if (bot->IsInWorld())
++            {
++                WorldPosition botPosition(bot);
++                float visibilityDistance = static_cast<float>(sPlayerbotAIConfig.BotActiveAloneForceWhenInRadius);
++                for (Player* realPlayer : realPlayers)
++                {
++                    if (realPlayer->GetMapId() == bot->GetMapId() &&
++                        botPosition.sqDistance2d(WorldPosition(realPlayer)) < visibilityDistance * visibilityDistance)
++                    {
++                        visibleAtSource = true;
++                        break;
++                    }
++                }
++            }
++
++            CandidateState state;
++            state.randomBot = IsRandomBot(bot);
++            state.sameFaction = sameFaction;
++            state.inWorld = bot->IsInWorld();
++            state.alive = bot->IsAlive();
++            state.overworld = bot->GetMap() && !bot->GetMap()->IsDungeon() && !bot->GetMap()->IsBattlegroundOrArena();
++            state.teleporting = bot->IsBeingTeleported();
++            state.rooted = bot->IsRooted();
++            state.inCombat = bot->IsInCombat();
++            state.grouped = bot->GetGroup() != nullptr;
++            state.inLfg = sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE;
++            state.inBattleground = bot->InBattlegroundQueue() || bot->InBattleground() || bot->InArena();
++            state.onTransport = bot->HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
++            state.visibleAtSource = visibleAtSource;
++            auto cooldown = playerLocalRelocationCooldown.find(botId);
++            state.coolingDown = cooldown != playerLocalRelocationCooldown.end() && cooldown->second > time(nullptr);
++
++            if (!usedBots.count(botId) && IsEligible(state) &&
++                (matched || CanPromote(bot->GetLevel(), player->GetLevel(), DEFAULT_MAX_LEVEL)))
++            {
++                candidates.push_back({bot, matched, LevelDelta(bot->GetLevel(), player->GetLevel())});
++            }
++        }
++
++        uint32 budget = std::min(RelocationBudget(nearby, sPlayerbotAIConfig.playerLocalPopulationTarget,
++                                                   sPlayerbotAIConfig.playerLocalPopulationMaxRelocationsPerCycle),
++                                 relocationsRemaining);
++        std::sort(candidates.begin(), candidates.end(), [](Candidate const& left, Candidate const& right)
++                  {
++                      if (left.matched != right.matched)
++                          return left.matched > right.matched;
++                      if (left.levelDelta != right.levelDelta)
++                          return left.levelDelta < right.levelDelta;
++                      return left.bot->GetGUID().GetCounter() < right.bot->GetGUID().GetCounter();
++                  });
++
++        uint32 relocatedForPlayer = 0;
++        uint32 promotedForPlayer = 0;
++        for (Candidate const& candidate : candidates)
++        {
++            if (!budget)
++                break;
++
++            Player* bot = candidate.bot;
++            uint32 botId = bot->GetGUID().GetCounter();
++            --budget;
++            --relocationsRemaining;
++            bool promoted = false;
++            if (!candidate.matched)
++            {
++                uint32 newLevel = PromotionLevel(player->GetLevel(), botId,
++                                                 sPlayerbotAIConfig.playerLocalPopulationPreferredLevelDelta,
++                                                 DEFAULT_MAX_LEVEL);
++                newLevel = std::max<uint32>(newLevel, bot->GetLevel());
++                PlayerbotFactory(bot, newLevel).Randomize(true);
++                promoted = true;
++            }
++
++            if (!RelocateBotNearPlayer(bot, player))
++            {
++                if (promoted)
++                    playerLocalRelocationCooldown[botId] = time(nullptr) +
++                        sPlayerbotAIConfig.playerLocalPopulationRelocationCooldownSeconds;
++                LOG_INFO("playerbots",
++                         "LA23_LOCAL_POPULATION action=arrival_failed player={} bot={} bot_level={} zone={} "
++                         "promoted={}",
++                         player->GetName(), bot->GetName(), bot->GetLevel(), player->GetZoneId(), promoted);
++                continue;
++            }
++
++            usedBots.insert(botId);
++            playerLocalRelocationCooldown[botId] = time(nullptr) +
++                sPlayerbotAIConfig.playerLocalPopulationRelocationCooldownSeconds;
++            ++relocatedForPlayer;
++            ++totalRelocated;
++            if (promoted)
++            {
++                ++promotedForPlayer;
++                ++totalPromoted;
++            }
++
++            LOG_INFO("playerbots",
++                     "LA23_LOCAL_POPULATION action=relocate player={} player_level={} bot={} bot_level={} zone={} "
++                     "cooldown_seconds={}",
++                     player->GetName(), player->GetLevel(), bot->GetName(), bot->GetLevel(), player->GetZoneId(),
++                     sPlayerbotAIConfig.playerLocalPopulationRelocationCooldownSeconds);
++        }
++
++        LOG_INFO("playerbots",
++                 "LA23_LOCAL_POPULATION action=cycle player={} level={} zone={} nearby={} target={} eligible={} "
++                 "relocated={} promoted={} global_remaining={}",
++                 player->GetName(), player->GetLevel(), player->GetZoneId(), nearby,
++                 sPlayerbotAIConfig.playerLocalPopulationTarget, candidates.size(), relocatedForPlayer,
++                 promotedForPlayer, relocationsRemaining);
++
++        if (!relocationsRemaining)
++            break;
++    }
++
++    LOG_INFO("playerbots", "LA23_LOCAL_POPULATION action=summary humans={} relocated={} promoted={} online_bots={}",
++             realPlayers.size(), totalRelocated, totalPromoted, playerBots.size());
++}
++
+ void RandomPlayerbotMgr::ScheduleRandomize(uint32 bot, uint32 time) { SetEventValue(bot, "randomize", 1, time); }
+ 
+ void RandomPlayerbotMgr::ScheduleTeleport(uint32 bot, uint32 time)
+@@ -1406,14 +1828,8 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
+             if (!sRandomPlayerbotMgr.IsRandomBot(player))
+                 update = false;
+ 
+-            if (player->GetGroup() && botAI->GetGroupLeader())
+-            {
+-                PlayerbotAI* groupLeaderBotAI = GET_PLAYERBOT_AI(botAI->GetGroupLeader());
+-                if (!groupLeaderBotAI || groupLeaderBotAI->IsRealPlayer())
+-                {
+-                    update = false;
+-                }
+-            }
++            if (PreservePlayerGroupFromAmbientRecovery(player))
++                update = false;
+ 
+             // if (botAI->HasPlayerNearby(sPlayerbotAIConfig.grindDistance))
+             //     update = false;
+@@ -1450,6 +1866,14 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
+     if (!botAI)
+         return false;
+ 
++    if (PreservePlayerGroupFromAmbientRecovery(bot))
++    {
++        LOG_DEBUG("playerbots",
++                  "Living Azeroth dungeon recovery ambient_action=suppressed bot={} group={} dead={}",
++                  bot->GetGUID().GetCounter(), bot->GetGroup()->GetGUID().GetCounter(), bot->isDead());
++        return false;
++    }
++
+     if (bot->InBattleground())
+         return false;
+ 
+@@ -1763,6 +2187,39 @@ void RandomPlayerbotMgr::Init()
+         sRandomPlayerbotMgr.LoadBattleMastersCache();
+ 
+     PlayerbotsDatabase.Execute("DELETE FROM playerbots_random_bots WHERE event = 'add'");
++
++    std::unordered_set<uint32> pinnedAccounts;
++    uint32 pinnedCount = 0;
++    for (uint32 bot : sPlayerbotAIConfig.pinnedRandomBotGuids)
++    {
++        ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(bot);
++        uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guid);
++        if (!accountId)
++        {
++            LOG_ERROR("playerbots", "Pinned random bot character {} does not exist; skipping", bot);
++            continue;
++        }
++
++        if (!IsAccountType(accountId, 1))
++        {
++            LOG_ERROR("playerbots", "Pinned random bot character {} belongs to non-RNDbot account {}; skipping",
++                      bot, accountId);
++            continue;
++        }
++
++        if (!pinnedAccounts.insert(accountId).second)
++        {
++            LOG_ERROR("playerbots", "Pinned random bot character {} shares account {}; only one character per account is allowed",
++                      bot, accountId);
++            continue;
++        }
++
++        SetEventValue(bot, "add", 1, sPlayerbotAIConfig.permanentlyInWorldTime);
++        ++pinnedCount;
++    }
++
++    if (pinnedCount)
++        LOG_INFO("playerbots", "Pinned {} random bot character(s) for this world startup", pinnedCount);
+ }
+ 
+ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
+diff --git a/src/Bot/RandomPlayerbotMgr.h b/src/Bot/RandomPlayerbotMgr.h
+index 4e167dd..0dccb06 100644
+--- a/src/Bot/RandomPlayerbotMgr.h
++++ b/src/Bot/RandomPlayerbotMgr.h
+@@ -173,6 +173,13 @@ public:
+     void AssignAccountTypes();
+     bool IsAccountType(uint32 accountId, uint8 accountType);
+ 
++    // Stable module integration for long-lived, namespaced profile markers.
++    uint32 GetPersistentEventValue(uint32 bot, std::string const& event) { return GetEventValue(bot, event); }
++    uint32 SetPersistentEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn)
++    {
++        return SetEventValue(bot, event, value, validIn);
++    }
++
+ protected:
+     void OnBotLoginInternal(Player* const bot) override;
+ 
+@@ -204,6 +211,8 @@ private:
+         this->BgCheckTimer = 0;
+         this->LfgCheckTimer = 0;
+         this->PlayersCheckTimer = 0;
++        this->PlayerLocalPopulationTimer = 0;
++        this->AdaptiveLevelCohortTimer = 0;
+     }
+ 
+     ~RandomPlayerbotMgr() = default;
+@@ -230,6 +239,8 @@ private:
+     time_t BgCheckTimer;
+     time_t LfgCheckTimer;
+     time_t PlayersCheckTimer;
++    time_t PlayerLocalPopulationTimer;
++    time_t AdaptiveLevelCohortTimer;
+     time_t RealPlayerLastTimeSeen = 0;
+     time_t DelayLoginBotsTimer;
+     time_t printStatsTimer;
+@@ -238,6 +249,9 @@ private:
+     void ScheduleRandomize(uint32 bot, uint32 time);
+     void RandomTeleport(Player* bot);
+     void RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth = false);
++    void UpdatePlayerLocalPopulation();
++    void UpdateAdaptiveLevelCohort();
++    bool RelocateBotNearPlayer(Player* bot, Player* player);
+     uint32 GetZoneLevel(uint16 mapId, float teleX, float teleY, float teleZ);
+     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
+     std::vector<Player*> players;
+@@ -247,6 +261,8 @@ private:
+     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
+     std::map<TeamId, std::map<BattlegroundTypeId, std::vector<uint32>>> BattleMastersCache;
+     std::unordered_map<uint32, BotEventCache> eventCache;
++    std::unordered_map<uint32, time_t> playerLocalRelocationCooldown;
++    std::unordered_map<uint32, time_t> adaptiveLevelCohortCooldown;
+     std::list<uint32> currentBots;
+     uint32 bgBotsCount;
+     uint32 playersLevel;
+diff --git a/src/PlayerbotAIConfig.cpp b/src/PlayerbotAIConfig.cpp
+index eef9bfc..50ba932 100644
+--- a/src/PlayerbotAIConfig.cpp
++++ b/src/PlayerbotAIConfig.cpp
+@@ -278,6 +278,47 @@ bool PlayerbotAIConfig::Initialize()
+     randomBotEmote = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotEmote", false);
+     randomBotSuggestDungeons = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotSuggestDungeons", true);
+     randomBotSayWithoutMaster = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotSayWithoutMaster", false);
++    livingAzerothChatEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.LivingAzerothChat.Enable", false);
++    livingAzerothChatReplyToWorld =
++        sConfigMgr->GetOption<bool>("AiPlayerbot.LivingAzerothChat.ReplyToWorld", false);
++    livingAzerothChatAddressedChance = std::min<uint32>(
++        100, sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.AddressedChance", 100));
++    livingAzerothChatUnaddressedChance = std::min<uint32>(
++        100, sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.UnaddressedChance", 0));
++    livingAzerothChatBotChance = std::min<uint32>(
++        100, sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.BotChance", 0));
++    livingAzerothChatDelayMin = std::max<uint32>(
++        1, std::min<uint32>(30,
++                            sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.DelayMinSeconds", 3)));
++    livingAzerothChatDelayMax = std::max<uint32>(
++        livingAzerothChatDelayMin,
++        std::min<uint32>(60,
++                         sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.DelayMaxSeconds", 8)));
++    livingAzerothChatCooldownMin = std::max<uint32>(
++        1, std::min<uint32>(300,
++                            sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.CooldownMinSeconds", 15)));
++    livingAzerothChatCooldownMax = std::max<uint32>(
++        livingAzerothChatCooldownMin,
++        std::min<uint32>(600,
++                         sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.CooldownMaxSeconds", 45)));
++    livingAzerothChatClaimTtl =
++        std::max<uint32>(1, std::min<uint32>(30,
++            sConfigMgr->GetOption<uint32>("AiPlayerbot.LivingAzerothChat.ClaimTtlSeconds", 5)));
++
++    LOG_INFO(
++        "server.loading",
++        "Living Azeroth Chat v2 config: enabled={} world={} addressed={} unaddressed={} bot={} "
++        "delay={}-{} cooldown={}-{} claimTtl={}",
++        livingAzerothChatEnabled,
++        livingAzerothChatReplyToWorld,
++        livingAzerothChatAddressedChance,
++        livingAzerothChatUnaddressedChance,
++        livingAzerothChatBotChance,
++        livingAzerothChatDelayMin,
++        livingAzerothChatDelayMax,
++        livingAzerothChatCooldownMin,
++        livingAzerothChatCooldownMax,
++        livingAzerothChatClaimTtl);
+ 
+     // broadcastChanceMaxValue is used in urand(1, broadcastChanceMaxValue) for broadcasts,
+     // lowering it will increase the chance, setting it to 0 will disable broadcasts
+@@ -552,6 +593,8 @@ bool PlayerbotAIConfig::Initialize()
+     randomBotAccountPrefix = sConfigMgr->GetOption<std::string>("AiPlayerbot.RandomBotAccountPrefix", "rndbot");
+     randomBotAccountCount = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotAccountCount", 0);
+     deleteRandomBotAccounts = sConfigMgr->GetOption<bool>("AiPlayerbot.DeleteRandomBotAccounts", false);
++    LoadList<std::vector<uint32>>(
++        sConfigMgr->GetOption<std::string>("AiPlayerbot.PinnedRandomBotGuids", ""), pinnedRandomBotGuids);
+     randomBotGuildCount = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotGuildCount", 20);
+     randomBotGuildSizeMax = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotGuildSizeMax", 15);
+     deleteRandomBotGuilds = sConfigMgr->GetOption<bool>("AiPlayerbot.DeleteRandomBotGuilds", false);
+@@ -713,6 +756,47 @@ bool PlayerbotAIConfig::Initialize()
+     RpgStatusProbWeight[RPG_OUTDOOR_PVP] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.OutdoorPvp", 10);
+ 
+     syncLevelWithPlayers = sConfigMgr->GetOption<bool>("AiPlayerbot.SyncLevelWithPlayers", false);
++    playerLocalPopulationEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.PlayerLocalPopulation.Enable", false);
++    playerLocalPopulationMinimum =
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MinimumPerPlayer", 6);
++    playerLocalPopulationMaximum = std::max(
++        playerLocalPopulationMinimum,
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MaximumPerPlayer", 10));
++    playerLocalPopulationTarget = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.TargetPerPlayer", 8),
++        playerLocalPopulationMinimum, playerLocalPopulationMaximum);
++    playerLocalPopulationPreferredLevelDelta =
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.PreferredLevelDelta", 3);
++    playerLocalPopulationMaximumLevelDelta = std::max(
++        playerLocalPopulationPreferredLevelDelta,
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MaximumLevelDelta", 5));
++    playerLocalPopulationCheckIntervalSeconds = std::max(
++        10u, sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.CheckIntervalSeconds", 30));
++    playerLocalPopulationMaxRelocationsPerCycle = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MaxRelocationsPerCycle", 2), 1u, 4u);
++    playerLocalPopulationRelocationCooldownSeconds = std::max(
++        60u, sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.RelocationCooldownSeconds", 600));
++    playerLocalPopulationMinimumArrivalDistance = std::max(
++        151u, sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MinimumArrivalDistance", 200));
++    playerLocalPopulationMaximumArrivalDistance = std::max(
++        playerLocalPopulationMinimumArrivalDistance + 50,
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.MaximumArrivalDistance", 800));
++    playerLocalPopulationSafeArrivalAttempts = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.PlayerLocalPopulation.SafeArrivalAttempts", 12), 1u, 32u);
++    adaptiveLevelCohortEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.AdaptiveLevelCohort.Enable", false);
++    adaptiveLevelCohortTargetPercent = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.TargetPercent", 80), 50u, 100u);
++    adaptiveLevelCohortWindowLevels = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.WindowLevels", 25), 5u, 80u);
++    adaptiveLevelCohortLowerSlack = std::min(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.LowerSlack", 4),
++        adaptiveLevelCohortWindowLevels - 1);
++    adaptiveLevelCohortCheckIntervalSeconds = std::max(
++        60u, sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.CheckIntervalSeconds", 300));
++    adaptiveLevelCohortMaxChangesPerCycle = std::clamp(
++        sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.MaxChangesPerCycle", 2), 1u, 4u);
++    adaptiveLevelCohortChangeCooldownSeconds = std::max(
++        300u, sConfigMgr->GetOption<uint32>("AiPlayerbot.AdaptiveLevelCohort.ChangeCooldownSeconds", 1800));
+     randomBotGroupNearby = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotGroupNearby", false);
+ 
+     // arena
+diff --git a/src/PlayerbotAIConfig.h b/src/PlayerbotAIConfig.h
+index b01b5fd..9d22588 100644
+--- a/src/PlayerbotAIConfig.h
++++ b/src/PlayerbotAIConfig.h
+@@ -176,6 +176,16 @@ public:
+     bool enableBroadcasts;
+     bool enableGreet;
+     bool randomBotSayWithoutMaster;
++    bool livingAzerothChatEnabled;
++    bool livingAzerothChatReplyToWorld;
++    uint32 livingAzerothChatAddressedChance;
++    uint32 livingAzerothChatUnaddressedChance;
++    uint32 livingAzerothChatBotChance;
++    uint32 livingAzerothChatDelayMin;
++    uint32 livingAzerothChatDelayMax;
++    uint32 livingAzerothChatCooldownMin;
++    uint32 livingAzerothChatCooldownMax;
++    uint32 livingAzerothChatClaimTtl;
+ 
+     uint32 broadcastChanceMaxValue;
+ 
+@@ -286,6 +296,7 @@ public:
+     uint32 randomBotAccountCount;
+     bool randomBotRandomPassword;
+     bool deleteRandomBotAccounts;
++    std::vector<uint32> pinnedRandomBotGuids;
+     uint32 randomBotGuildCount, randomBotGuildSizeMax;
+     bool deleteRandomBotGuilds;
+     std::vector<uint32> pvpProhibitedZoneIds;
+@@ -382,6 +393,25 @@ public:
+     bool enableNewRpgStrategy;
+     std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
+     bool syncLevelWithPlayers;
++    bool playerLocalPopulationEnabled;
++    uint32 playerLocalPopulationTarget;
++    uint32 playerLocalPopulationMinimum;
++    uint32 playerLocalPopulationMaximum;
++    uint32 playerLocalPopulationPreferredLevelDelta;
++    uint32 playerLocalPopulationMaximumLevelDelta;
++    uint32 playerLocalPopulationCheckIntervalSeconds;
++    uint32 playerLocalPopulationMaxRelocationsPerCycle;
++    uint32 playerLocalPopulationRelocationCooldownSeconds;
++    uint32 playerLocalPopulationMinimumArrivalDistance;
++    uint32 playerLocalPopulationMaximumArrivalDistance;
++    uint32 playerLocalPopulationSafeArrivalAttempts;
++    bool adaptiveLevelCohortEnabled;
++    uint32 adaptiveLevelCohortTargetPercent;
++    uint32 adaptiveLevelCohortWindowLevels;
++    uint32 adaptiveLevelCohortLowerSlack;
++    uint32 adaptiveLevelCohortCheckIntervalSeconds;
++    uint32 adaptiveLevelCohortMaxChangesPerCycle;
++    uint32 adaptiveLevelCohortChangeCooldownSeconds;
+     bool autoLearnQuestSpells;
+     bool autoTeleportForLevel;
+     bool randomBotGroupNearby;

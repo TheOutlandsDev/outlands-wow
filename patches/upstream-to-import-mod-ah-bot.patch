@@ -1,0 +1,36 @@
+diff --git a/src/AuctionHouseBotWorldScript.cpp b/src/AuctionHouseBotWorldScript.cpp
+index 5ea95da..ff7e0c7 100644
+--- a/src/AuctionHouseBotWorldScript.cpp
++++ b/src/AuctionHouseBotWorldScript.cpp
+@@ -28,6 +28,17 @@ void AHBot_WorldScript::OnBeforeConfigLoad(bool reload)
+     //
+ 
+     bool   debug   = sConfigMgr->GetOption<bool>  ("AuctionHouseBot.DEBUG"  , false);
++    bool   sellerEnabled = sConfigMgr->GetOption<bool>("AuctionHouseBot.EnableSeller", false);
++    bool   buyerEnabled = sConfigMgr->GetOption<bool>("AuctionHouseBot.EnableBuyer", false);
++
++    if (!sellerEnabled && !buyerEnabled)
++    {
++        gBotsId.clear();
++        if (reload)
++            DeleteBots();
++        return;
++    }
++
+     uint32 account = sConfigMgr->GetOption<uint32>("AuctionHouseBot.Account", 0);
+     uint32 player  = sConfigMgr->GetOption<uint32>("AuctionHouseBot.GUID"   , 0);
+ 
+@@ -127,6 +138,13 @@ void AHBot_WorldScript::OnBeforeConfigLoad(bool reload)
+ 
+ void AHBot_WorldScript::OnStartup()
+ {
++    if (!sConfigMgr->GetOption<bool>("AuctionHouseBot.EnableSeller", false) &&
++        !sConfigMgr->GetOption<bool>("AuctionHouseBot.EnableBuyer", false))
++    {
++        LOG_INFO("server.loading", "AHBot: disabled by configuration; stock buyer and seller were not initialized.");
++        return;
++    }
++
+     LOG_INFO("server.loading", "Initialize AuctionHouseBot...");
+ 
+     //

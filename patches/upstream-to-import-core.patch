@@ -1,0 +1,800 @@
+diff --git a/.gitignore b/.gitignore
+index c468636..4844df5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -121,4 +121,13 @@ __pycache__/
+ #
+ # ==================
+ .cache
+-compile_commands.json
+\ No newline at end of file
++compile_commands.json
++
++# Linux translation baseline: preserve every imported custom module and the
++# custom SQL/script locations that upstream defaults ignore.
++!/modules/
++!/modules/**
++!/data/sql/custom/
++!/data/sql/custom/**
++!/src/server/scripts/Custom/
++!/src/server/scripts/Custom/**
+diff --git a/.vscode/extensions.json b/.vscode/extensions.json
+deleted file mode 100644
+index f5e39be..0000000
+--- a/.vscode/extensions.json
++++ /dev/null
+@@ -1,18 +0,0 @@
+-{
+-    "recommendations": [
+-        "ms-vscode-remote.remote-containers",
+-        "notskm.clang-tidy",
+-        "xaver.clang-format",
+-        "bbenoist.doxygen",
+-        "ms-vscode.cpptools",
+-        "ms-vscode.cmake-tools",
+-        "mhutchie.git-graph",
+-        "github.vscode-pull-request-github",
+-        "eamodio.gitlens",
+-        "cschlosser.doxdocgen",
+-        "sanaajani.taskrunnercode",
+-        "mads-hartmann.bash-ide-vscode",
+-        "jetmartin.bats",
+-        "ms-vscode.makefile-tools",
+-    ]
+-}
+diff --git a/.vscode/launch.json b/.vscode/launch.json
+deleted file mode 100644
+index fe39dc1..0000000
+--- a/.vscode/launch.json
++++ /dev/null
+@@ -1,68 +0,0 @@
+-{
+-    "version": "0.2.0",
+-    "configurations": [
+-        {
+-            "name": "Linux/Docker debug",
+-            "type": "cppdbg",
+-            "request": "launch",
+-            "program": "/azerothcore/env/dist/bin/worldserver",
+-            "cwd": "/azerothcore",
+-            "args": [],
+-            "environment": [],
+-            "externalConsole": false,
+-            "sourceFileMap": {
+-                "/azerothcore": "${workspaceFolder}"
+-            },
+-            "linux": {
+-                "MIMode": "gdb",
+-                "miDebuggerPath": "/usr/bin/gdb",
+-                "setupCommands": [
+-                    {
+-                        "description": "Enable pretty-printing for gdb",
+-                        "text": "-enable-pretty-printing",
+-                        "ignoreFailures": false
+-                    }
+-                ]
+-            }
+-        },
+-        {
+-            "name": "(docker run) Pipe Launch",
+-            "type": "cppdbg",
+-            "request": "launch",
+-            "program": "/azerothcore/env/dist/bin/worldserver",
+-            "cwd": "/azerothcore",
+-            "args": [],
+-            "environment": [],
+-            "externalConsole": true,
+-            "pipeTransport": {
+-                "debuggerPath": "/usr/bin/gdb",
+-                "pipeProgram": "docker compose",
+-                "pipeArgs": [
+-                    "exec", "-T", "ac-worldserver", "sh", "-c"
+-                ],
+-                "pipeCwd": "${workspaceFolder}"
+-            },
+-            "sourceFileMap": {
+-                "/azerothcore": "${workspaceFolder}"
+-            },
+-            "linux": {
+-                "MIMode": "gdb",
+-                "miDebuggerPath": "/usr/bin/gdb",
+-                "setupCommands": [
+-                    {
+-                        "description": "Enable pretty-printing for gdb",
+-                        "text": "-enable-pretty-printing",
+-                        "ignoreFailures": false
+-                    }
+-                ]
+-            },
+-            "osx": {
+-                "MIMode": "lldb"
+-            },
+-            "windows": {
+-                "MIMode": "gdb",
+-                "miDebuggerPath": "C:\\MinGw\\bin\\gdb.exe"
+-            }
+-        }
+-    ]
+-}
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+deleted file mode 100644
+index b76b4f2..0000000
+--- a/.vscode/settings.json
++++ /dev/null
+@@ -1,133 +0,0 @@
+-{
+-    "github.copilot.chat.commitMessageGeneration.instructions": [
+-        {
+-            "file": ".git_commit_template.txt"
+-        },
+-    ],
+-    "files.associations": {
+-        "*.dist": "properties",
+-        "*.crash": "properties",
+-        "*.wtf": "properties",
+-        "*.cnf": "properties",
+-        "array": "cpp",
+-        "atomic": "cpp",
+-        "bit": "cpp",
+-        "*.tcc": "cpp",
+-        "bitset": "cpp",
+-        "cctype": "cpp",
+-        "chrono": "cpp",
+-        "cinttypes": "cpp",
+-        "clocale": "cpp",
+-        "cmath": "cpp",
+-        "complex": "cpp",
+-        "condition_variable": "cpp",
+-        "csignal": "cpp",
+-        "cstdarg": "cpp",
+-        "cstddef": "cpp",
+-        "cstdint": "cpp",
+-        "cstdio": "cpp",
+-        "cstdlib": "cpp",
+-        "cstring": "cpp",
+-        "ctime": "cpp",
+-        "cwchar": "cpp",
+-        "cwctype": "cpp",
+-        "deque": "cpp",
+-        "list": "cpp",
+-        "map": "cpp",
+-        "set": "cpp",
+-        "unordered_map": "cpp",
+-        "unordered_set": "cpp",
+-        "vector": "cpp",
+-        "exception": "cpp",
+-        "algorithm": "cpp",
+-        "functional": "cpp",
+-        "iterator": "cpp",
+-        "memory": "cpp",
+-        "memory_resource": "cpp",
+-        "numeric": "cpp",
+-        "optional": "cpp",
+-        "random": "cpp",
+-        "ratio": "cpp",
+-        "string": "cpp",
+-        "string_view": "cpp",
+-        "system_error": "cpp",
+-        "tuple": "cpp",
+-        "type_traits": "cpp",
+-        "utility": "cpp",
+-        "fstream": "cpp",
+-        "initializer_list": "cpp",
+-        "iomanip": "cpp",
+-        "iosfwd": "cpp",
+-        "iostream": "cpp",
+-        "istream": "cpp",
+-        "limits": "cpp",
+-        "mutex": "cpp",
+-        "new": "cpp",
+-        "ostream": "cpp",
+-        "shared_mutex": "cpp",
+-        "sstream": "cpp",
+-        "stdexcept": "cpp",
+-        "streambuf": "cpp",
+-        "thread": "cpp",
+-        "cfenv": "cpp",
+-        "typeinfo": "cpp",
+-        "codecvt": "cpp",
+-        "xstring": "cpp",
+-        "variant": "cpp",
+-        "any": "cpp",
+-        "barrier": "cpp",
+-        "charconv": "cpp",
+-        "compare": "cpp",
+-        "concepts": "cpp",
+-        "coroutine": "cpp",
+-        "csetjmp": "cpp",
+-        "execution": "cpp",
+-        "filesystem": "cpp",
+-        "format": "cpp",
+-        "forward_list": "cpp",
+-        "future": "cpp",
+-        "ios": "cpp",
+-        "latch": "cpp",
+-        "locale": "cpp",
+-        "numbers": "cpp",
+-        "queue": "cpp",
+-        "ranges": "cpp",
+-        "regex": "cpp",
+-        "scoped_allocator": "cpp",
+-        "semaphore": "cpp",
+-        "source_location": "cpp",
+-        "span": "cpp",
+-        "stack": "cpp",
+-        "stop_token": "cpp",
+-        "strstream": "cpp",
+-        "syncstream": "cpp",
+-        "typeindex": "cpp",
+-        "valarray": "cpp",
+-        "xfacet": "cpp",
+-        "xhash": "cpp",
+-        "xiosbase": "cpp",
+-        "xlocale": "cpp",
+-        "xlocbuf": "cpp",
+-        "xlocinfo": "cpp",
+-        "xlocmes": "cpp",
+-        "xlocmon": "cpp",
+-        "xlocnum": "cpp",
+-        "xloctime": "cpp",
+-        "xmemory": "cpp",
+-        "xstddef": "cpp",
+-        "xtr1common": "cpp",
+-        "xtree": "cpp",
+-        "xutility": "cpp",
+-        "*.ipp": "cpp",
+-        "resumable": "cpp"
+-    },
+-    "deno.enable": true,
+-    "deno.path": "deps/deno/bin/deno",
+-    "deno.lint": true,
+-    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+-    "C_Cpp.default.cppStandard": "c++20",
+-    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+-    "C_Cpp.default.compilerPath": "/usr/bin/clang",
+-    "cmake.sourceDirectory": ["${workspaceFolder}"],
+-    "cmake.buildDirectory": "${workspaceFolder}/var/build",
+-}
+diff --git a/.vscode/tasks.json b/.vscode/tasks.json
+deleted file mode 100644
+index c22c4f5..0000000
+--- a/.vscode/tasks.json
++++ /dev/null
+@@ -1,96 +0,0 @@
+-{
+-    "version": "2.0.0",
+-    "tasks": [
+-      {
+-        "label": "AzerothCore: Dashboard",
+-        "type": "shell",
+-        "command": "./acore.sh",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Download client-data",
+-        "type": "shell",
+-        "command": "./acore.sh client-data",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Clean build",
+-        "type": "shell",
+-        "command": "./acore.sh compiler clean",
+-        "group": "build",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Build",
+-        "type": "shell",
+-        "command": "./acore.sh compiler build",
+-        "group": {
+-          "kind": "build",
+-          "isDefault": true
+-        },
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Check codestyle cpp",
+-        "type": "shell",
+-        "command": "python apps/codestyle/codestyle-cpp.py",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Check codestyle sql",
+-        "type": "shell",
+-        "command": "python apps/codestyle/codestyle-sql.py",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Run authserver (restarter)",
+-        "type": "shell",
+-        "command": "./acore.sh run-authserver",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      },
+-      {
+-        "label": "AzerothCore: Run worldserver (restarter)",
+-        "type": "shell",
+-        "command": "./acore.sh run-worldserver",
+-        "group": "none",
+-        "presentation": {
+-          "reveal": "always",
+-          "panel": "new"
+-        },
+-        "problemMatcher": []
+-      }
+-    ]
+-  }
+diff --git a/acore.sh b/acore.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/ci/ci-compile.sh b/apps/ci/ci-compile.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/ci/ci-error-check.sh b/apps/ci/ci-error-check.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/ci/ci-install-modules.sh b/apps/ci/ci-install-modules.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/ci/ci-run-unit-tests.sh b/apps/ci/ci-run-unit-tests.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/ci/mac/ci-compile.sh b/apps/ci/mac/ci-compile.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/compiler/compiler.sh b/apps/compiler/compiler.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/compiler/test/test_compiler.bats b/apps/compiler/test/test_compiler.bats
+old mode 100755
+new mode 100644
+diff --git a/apps/compiler/test/test_compiler_config.bats b/apps/compiler/test/test_compiler_config.bats
+old mode 100755
+new mode 100644
+diff --git a/apps/compiler/test/test_compiler_integration.bats b/apps/compiler/test/test_compiler_integration.bats
+old mode 100755
+new mode 100644
+diff --git a/apps/extractor/extractor.sh b/apps/extractor/extractor.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/extractor/extractor_es.sh b/apps/extractor/extractor_es.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/git_tools/subrepo-update.sh b/apps/git_tools/subrepo-update.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/installer/test/test_module_commands.bats b/apps/installer/test/test_module_commands.bats
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/examples/restarter-auth.sh b/apps/startup-scripts/src/examples/restarter-auth.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/examples/restarter-world.sh b/apps/startup-scripts/src/examples/restarter-world.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/examples/starter-auth.sh b/apps/startup-scripts/src/examples/starter-auth.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/examples/starter-world.sh b/apps/startup-scripts/src/examples/starter-world.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/migrate-registry.sh b/apps/startup-scripts/src/migrate-registry.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/run-engine b/apps/startup-scripts/src/run-engine
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/service-manager.sh b/apps/startup-scripts/src/service-manager.sh
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/simple-restarter b/apps/startup-scripts/src/simple-restarter
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/src/starter b/apps/startup-scripts/src/starter
+old mode 100755
+new mode 100644
+diff --git a/apps/startup-scripts/test/test_startup_scripts.bats b/apps/startup-scripts/test/test_startup_scripts.bats
+old mode 100755
+new mode 100644
+diff --git a/apps/test-framework/run-bash-tests.sh b/apps/test-framework/run-bash-tests.sh
+old mode 100755
+new mode 100644
+diff --git a/bin/acore b/bin/acore
+old mode 100755
+new mode 100644
+diff --git a/bin/acore-compiler b/bin/acore-compiler
+old mode 100755
+new mode 100644
+diff --git a/bin/acore-db-export b/bin/acore-db-export
+old mode 100755
+new mode 100644
+diff --git a/bin/acore-db-pendings b/bin/acore-db-pendings
+old mode 100755
+new mode 100644
+diff --git a/bin/acore-import-changelogs b/bin/acore-import-changelogs
+old mode 100755
+new mode 100644
+diff --git a/bin/acore-installer b/bin/acore-installer
+old mode 100755
+new mode 100644
+diff --git a/data/sql/updates/pending_db_auth/create_sql.sh b/data/sql/updates/pending_db_auth/create_sql.sh
+old mode 100755
+new mode 100644
+diff --git a/data/sql/updates/pending_db_characters/create_sql.sh b/data/sql/updates/pending_db_characters/create_sql.sh
+old mode 100755
+new mode 100644
+diff --git a/data/sql/updates/pending_db_world/create_sql.sh b/data/sql/updates/pending_db_world/create_sql.sh
+old mode 100755
+new mode 100644
+diff --git a/deps/acore/joiner/joiner.sh b/deps/acore/joiner/joiner.sh
+old mode 100755
+new mode 100644
+diff --git a/deps/acore/mysql-tools/bin/dump-parser b/deps/acore/mysql-tools/bin/dump-parser
+old mode 100755
+new mode 100644
+diff --git a/deps/acore/mysql-tools/bin/dump-parser-mac b/deps/acore/mysql-tools/bin/dump-parser-mac
+old mode 100755
+new mode 100644
+diff --git a/deps/jsonpath/JSONPath.sh b/deps/jsonpath/JSONPath.sh
+old mode 100755
+new mode 100644
+diff --git a/deps/semver_bash/semver.sh b/deps/semver_bash/semver.sh
+old mode 100755
+new mode 100644
+diff --git a/doc/changelog/pendings/create.sh b/doc/changelog/pendings/create.sh
+old mode 100755
+new mode 100644
+diff --git a/env/dist/.gitkeep b/env/dist/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/env/dist/etc/.gitkeep b/env/dist/etc/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/env/dist/logs/.gitkeep b/env/dist/logs/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/install.sh b/install.sh
+old mode 100755
+new mode 100644
+diff --git a/src/cmake/macros/FindFilesystem.cmake b/src/cmake/macros/FindFilesystem.cmake
+old mode 100755
+new mode 100644
+diff --git a/src/common/Logging/AppenderConsole.cpp b/src/common/Logging/AppenderConsole.cpp
+index 778cbfd..2a9294b 100644
+--- a/src/common/Logging/AppenderConsole.cpp
++++ b/src/common/Logging/AppenderConsole.cpp
+@@ -209,4 +209,8 @@ void AppenderConsole::_write(LogMessage const* message)
+     {
+         utf8printf(stdout_stream ? stdout : stderr, "%s%s\n", message->prefix.c_str(), message->text.c_str());
+     }
++
++    // graceful_process_host redirects these streams to gate files. Redirected Windows CRT streams
++    // are block-buffered, so flush every complete log record for live observability.
++    fflush(stdout_stream ? stdout : stderr);
+ }
+diff --git a/src/server/apps/worldserver/Main.cpp b/src/server/apps/worldserver/Main.cpp
+index 6a08e96..62ee92e 100644
+--- a/src/server/apps/worldserver/Main.cpp
++++ b/src/server/apps/worldserver/Main.cpp
+@@ -31,6 +31,7 @@
+ #include "DatabaseEnv.h"
+ #include "DatabaseLoader.h"
+ #include "GitRevision.h"
++#include "GuildMgr.h"
+ #include "IoContext.h"
+ #include "MapMgr.h"
+ #include "Metric.h"
+@@ -412,6 +413,12 @@ int main(int argc, char** argv)
+ 
+     LOG_INFO("server.worldserver", "Halting process...");
+ 
++    // Kick and unload players before guild-bank items are destroyed. Guild::BankTab
++    // item cleanup resolves owners through ObjectAccessor, so both operations must
++    // happen before static world services and database pools begin destruction.
++    sWorldSocketMgrHandle.reset();
++    sGuildMgr->UnloadGuilds();
++
+     // 0 - normal shutdown
+     // 1 - shutdown at error
+     // 2 - restart command used, this code can be used by restarter for restart AzerothCore
+diff --git a/src/server/database/Database/Implementation/CharacterDatabase.cpp b/src/server/database/Database/Implementation/CharacterDatabase.cpp
+index db66772..92174a8 100644
+--- a/src/server/database/Database/Implementation/CharacterDatabase.cpp
++++ b/src/server/database/Database/Implementation/CharacterDatabase.cpp
+@@ -119,18 +119,18 @@ void CharacterDatabaseConnection::DoPrepareStatements()
+     PrepareStatement(CHAR_SEL_AUCTION_ITEMS, "SELECT creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text, itemguid, itemEntry FROM auctionhouse ah JOIN item_instance ii ON ah.itemguid = ii.guid", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_SEL_AUCTIONS, "SELECT id, houseid, itemguid, itemEntry, count, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit FROM auctionhouse ah INNER JOIN item_instance ii ON ii.guid = ah.itemguid", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_INS_AUCTION, "INSERT INTO auctionhouse (id, houseid, itemguid, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+-    PrepareStatement(CHAR_DEL_AUCTION, "DELETE FROM auctionhouse WHERE id = ?", CONNECTION_ASYNC);
++    PrepareStatement(CHAR_DEL_AUCTION, "DELETE FROM auctionhouse WHERE id = ?", CONNECTION_BOTH);
+     PrepareStatement(CHAR_UPD_AUCTION_BID, "UPDATE auctionhouse SET buyguid = ?, lastbid = ? WHERE id = ?", CONNECTION_ASYNC);
+-    PrepareStatement(CHAR_INS_MAIL, "INSERT INTO mail(id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
++    PrepareStatement(CHAR_INS_MAIL, "INSERT INTO mail(id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_BOTH);
+     PrepareStatement(CHAR_DEL_MAIL_BY_ID, "DELETE FROM mail WHERE id = ?", CONNECTION_ASYNC);
+-    PrepareStatement(CHAR_INS_MAIL_ITEM, "INSERT INTO mail_items(mail_id, item_guid, receiver) VALUES (?, ?, ?)", CONNECTION_ASYNC);
++    PrepareStatement(CHAR_INS_MAIL_ITEM, "INSERT INTO mail_items(mail_id, item_guid, receiver) VALUES (?, ?, ?)", CONNECTION_BOTH);
+     PrepareStatement(CHAR_DEL_MAIL_ITEM, "DELETE FROM mail_items WHERE item_guid = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_DEL_INVALID_MAIL_ITEM, "DELETE FROM mail_items WHERE item_guid = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_SEL_EXPIRED_MAIL, "SELECT id, messageType, sender, receiver, has_items, expire_time, stationery, checked, mailTemplateId FROM mail WHERE expire_time < ?", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_SEL_EXPIRED_MAIL_ITEMS, "SELECT item_guid, itemEntry, mail_id FROM mail_items mi INNER JOIN item_instance ii ON ii.guid = mi.item_guid LEFT JOIN mail mm ON mi.mail_id = mm.id WHERE mm.id IS NOT NULL AND mm.expire_time < ?", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_UPD_MAIL_RETURNED, "UPDATE mail SET sender = ?, receiver = ?, expire_time = ?, deliver_time = ?, cod = 0, checked = ? WHERE id = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_UPD_MAIL_ITEM_RECEIVER, "UPDATE mail_items SET receiver = ? WHERE item_guid = ?", CONNECTION_ASYNC);
+-    PrepareStatement(CHAR_UPD_ITEM_OWNER, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", CONNECTION_ASYNC);
++    PrepareStatement(CHAR_UPD_ITEM_OWNER, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", CONNECTION_BOTH);
+ 
+     PrepareStatement(CHAR_SEL_ITEM_REFUNDS, "SELECT player_guid, paidMoney, paidExtendedCost FROM item_refund_instance WHERE item_guid = ? AND player_guid = ? LIMIT 1", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_SEL_ITEM_BOP_TRADE, "SELECT allowedPlayers FROM item_soulbound_trade_data WHERE itemGuid = ? LIMIT 1", CONNECTION_SYNCH);
+@@ -507,7 +507,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
+     PrepareStatement(CHAR_UDP_CHAR_ARENA_POINTS_ACCUMULATIVE, "UPDATE characters SET arenaPoints = arenaPoints + ? WHERE guid = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_UPD_ALL_HONOR_POINTS, "UPDATE characters SET totalHonorPoints = 0", CONNECTION_SYNCH);
+     PrepareStatement(CHAR_UPD_ALL_ARENA_POINTS, "UPDATE characters SET arenaPoints = 0", CONNECTION_SYNCH);
+-    PrepareStatement(CHAR_UDP_CHAR_MONEY, "UPDATE characters SET money = ? WHERE guid = ?", CONNECTION_ASYNC);
++    PrepareStatement(CHAR_UDP_CHAR_MONEY, "UPDATE characters SET money = ? WHERE guid = ?", CONNECTION_BOTH);
+     PrepareStatement(CHAR_UDP_CHAR_MONEY_ACCUMULATIVE, "UPDATE characters SET money = money + ? WHERE guid = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_UPD_CHAR_REMOVE_GHOST, "UPDATE characters SET playerFlags = (playerFlags & (~16)) WHERE guid = ?", CONNECTION_ASYNC);
+     PrepareStatement(CHAR_INS_CHAR_ACTION, "INSERT INTO character_action (guid, spec, button, action, type) VALUES (?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+diff --git a/src/server/game/Guilds/GuildMgr.cpp b/src/server/game/Guilds/GuildMgr.cpp
+index bfa1986..da86775 100644
+--- a/src/server/game/Guilds/GuildMgr.cpp
++++ b/src/server/game/Guilds/GuildMgr.cpp
+@@ -23,8 +23,7 @@ GuildMgr::GuildMgr() : NextGuildId(1)
+ 
+ GuildMgr::~GuildMgr()
+ {
+-    for (GuildContainer::iterator itr = GuildStore.begin(); itr != GuildStore.end(); ++itr)
+-        delete itr->second;
++    UnloadGuilds();
+ }
+ 
+ GuildMgr* GuildMgr::instance()
+@@ -33,6 +32,23 @@ GuildMgr* GuildMgr::instance()
+     return &instance;
+ }
+ 
++void GuildMgr::UnloadGuilds()
++{
++    if (GuildStore.empty())
++        return;
++
++    LOG_INFO("server.worldserver", "Unloading {} guilds while world services are available...", GuildStore.size());
++
++    for (auto const& [id, guild] : GuildStore)
++    {
++        (void)id;
++        delete guild;
++    }
++
++    GuildStore.clear();
++    LOG_INFO("server.worldserver", "Guild manager unload complete.");
++}
++
+ void GuildMgr::AddGuild(Guild* guild)
+ {
+     GuildStore[guild->GetId()] = guild;
+diff --git a/src/server/game/Guilds/GuildMgr.h b/src/server/game/Guilds/GuildMgr.h
+index 7f7e698..0539b23 100644
+--- a/src/server/game/Guilds/GuildMgr.h
++++ b/src/server/game/Guilds/GuildMgr.h
+@@ -35,6 +35,7 @@ public:
+     std::string GetGuildNameById(uint32 guildId) const;
+ 
+     void LoadGuilds();
++    void UnloadGuilds();
+     void AddGuild(Guild* guild);
+     void RemoveGuild(uint32 guildId);
+ 
+diff --git a/src/server/game/Handlers/AuctionHouseHandler.cpp b/src/server/game/Handlers/AuctionHouseHandler.cpp
+index 19d8782..9894e60 100644
+--- a/src/server/game/Handlers/AuctionHouseHandler.cpp
++++ b/src/server/game/Handlers/AuctionHouseHandler.cpp
+@@ -269,6 +269,14 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
+             return;
+         }
+ 
++        bool const fullStack = itemsCount == 1 && item->GetCount() == count[i];
++        if (!sScriptMgr->CanAutomatedListingMutate(_player, item, count[i], bid,
++            buyout, auctionTime, deposit, fullStack))
++        {
++            SendAuctionCommandResult(0, AUCTION_SELL_ITEM, ERR_AUCTION_DATABASE_ERROR);
++            return;
++        }
++
+         _player->ModifyMoney(-int32(deposit));
+ 
+         AuctionEntry* AH = new AuctionEntry;
+@@ -325,6 +333,7 @@ void WorldSession::HandleAuctionSellItem(WorldPacket& recvData)
+             item->SaveToDB(trans);
+             AH->SaveToDB(trans);
+             _player->SaveInventoryAndGoldToDB(trans);
++            sScriptMgr->OnAutomatedListingPreCommit(_player, item, AH, trans);
+             CharacterDatabase.CommitTransaction(trans);
+ 
+             SendAuctionCommandResult(AH->Id, AUCTION_SELL_ITEM, ERR_AUCTION_OK);
+diff --git a/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.cpp b/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.cpp
+index bb978bc..6588921 100644
+--- a/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.cpp
++++ b/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.cpp
+@@ -86,6 +86,29 @@ void ScriptMgr::OnBeforeAuctionHouseMgrUpdate()
+     CALL_ENABLED_HOOKS(AuctionHouseScript, AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_UPDATE, script->OnBeforeAuctionHouseMgrUpdate());
+ }
+ 
++bool ScriptMgr::CanAutomatedListingMutate(Player* player, Item* item, uint32 count,
++    uint32 bid, uint32 buyout, uint32 durationSeconds, uint32 deposit, bool fullStack)
++{
++    ASSERT(player);
++    ASSERT(item);
++    CALL_ENABLED_BOOLEAN_HOOKS(AuctionHouseScript,
++        AUCTIONHOUSEHOOK_CAN_AUTOMATED_LISTING_MUTATE,
++        !script->CanAutomatedListingMutate(player, item, count, bid, buyout,
++            durationSeconds, deposit, fullStack));
++}
++
++void ScriptMgr::OnAutomatedListingPreCommit(Player* player, Item* item,
++    AuctionEntry* entry, CharacterDatabaseTransaction transaction)
++{
++    ASSERT(player);
++    ASSERT(item);
++    ASSERT(entry);
++    ASSERT(transaction);
++    CALL_ENABLED_HOOKS(AuctionHouseScript,
++        AUCTIONHOUSEHOOK_ON_AUTOMATED_LISTING_PRE_COMMIT,
++        script->OnAutomatedListingPreCommit(player, item, entry, transaction));
++}
++
+ AuctionHouseScript::AuctionHouseScript(const char* name, std::vector<uint16> enabledHooks)
+     : ScriptObject(name, AUCTIONHOUSEHOOK_END)
+ {
+diff --git a/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.h b/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.h
+index c821da6..7ac7d05 100644
+--- a/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.h
++++ b/src/server/game/Scripting/ScriptDefines/AuctionHouseScript.h
+@@ -18,6 +18,7 @@
+ #ifndef SCRIPT_OBJECT_AUCTION_HOUSE_SCRIPT_H_
+ #define SCRIPT_OBJECT_AUCTION_HOUSE_SCRIPT_H_
+ 
++#include "DatabaseEnvFwd.h"
+ #include "ScriptObject.h"
+ #include <vector>
+ 
+@@ -34,6 +35,8 @@ enum AuctionHouseHook
+     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_SEND_AUCTION_OUTBIDDED_MAIL,
+     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_SEND_AUCTION_CANCELLED_TO_BIDDER_MAIL,
+     AUCTIONHOUSEHOOK_ON_BEFORE_AUCTIONHOUSEMGR_UPDATE,
++    AUCTIONHOUSEHOOK_CAN_AUTOMATED_LISTING_MUTATE,
++    AUCTIONHOUSEHOOK_ON_AUTOMATED_LISTING_PRE_COMMIT,
+     AUCTIONHOUSEHOOK_END
+ };
+ 
+@@ -75,6 +78,17 @@ public:
+ 
+     // Called before updating the auctions
+     virtual void OnBeforeAuctionHouseMgrUpdate() { }
++
++    // Allows modules to fail closed for explicitly tracked automated listings.
++    // Ordinary player listings should return true.
++    virtual bool CanAutomatedListingMutate(Player* /*player*/, Item* /*item*/,
++        uint32 /*count*/, uint32 /*bid*/, uint32 /*buyout*/, uint32 /*durationSeconds*/,
++        uint32 /*deposit*/, bool /*fullStack*/) { return true; }
++
++    // Allows a module to append its destination receipt to the same native
++    // characters transaction as a full-stack auction listing.
++    virtual void OnAutomatedListingPreCommit(Player* /*player*/, Item* /*item*/,
++        AuctionEntry* /*entry*/, CharacterDatabaseTransaction /*transaction*/) { }
+ };
+ 
+ #endif
+diff --git a/src/server/game/Scripting/ScriptMgr.h b/src/server/game/Scripting/ScriptMgr.h
+index 35eb7d6..16c438c 100644
+--- a/src/server/game/Scripting/ScriptMgr.h
++++ b/src/server/game/Scripting/ScriptMgr.h
+@@ -281,6 +281,10 @@ public: /* AuctionHouseScript */
+     void OnAuctionRemove(AuctionHouseObject* ah, AuctionEntry* entry);
+     void OnAuctionSuccessful(AuctionHouseObject* ah, AuctionEntry* entry);
+     void OnAuctionExpire(AuctionHouseObject* ah, AuctionEntry* entry);
++    bool CanAutomatedListingMutate(Player* player, Item* item, uint32 count,
++        uint32 bid, uint32 buyout, uint32 durationSeconds, uint32 deposit, bool fullStack);
++    void OnAutomatedListingPreCommit(Player* player, Item* item, AuctionEntry* entry,
++        CharacterDatabaseTransaction transaction);
+     void OnBeforeAuctionHouseMgrSendAuctionWonMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* bidder, uint32& bidder_accId, bool& sendNotification, bool& updateAchievementCriteria, bool& sendMail);
+     void OnBeforeAuctionHouseMgrSendAuctionSalePendingMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* owner, uint32& owner_accId, bool& sendMail);
+     void OnBeforeAuctionHouseMgrSendAuctionSuccessfulMail(AuctionHouseMgr* auctionHouseMgr, AuctionEntry* auction, Player* owner, uint32& owner_accId, uint32& profit, bool& sendNotification, bool& updateAchievementCriteria, bool& sendMail);
+diff --git a/src/server/scripts/Outland/BlackTemple/boss_illidan.cpp b/src/server/scripts/Outland/BlackTemple/boss_illidan.cpp
+index 8a79fd4..168c1e7 100644
+--- a/src/server/scripts/Outland/BlackTemple/boss_illidan.cpp
++++ b/src/server/scripts/Outland/BlackTemple/boss_illidan.cpp
+@@ -24,6 +24,7 @@
+ #include "ScriptedGossip.h"
+ #include "SpellAuraEffects.h"
+ #include "SpellScript.h"
++#include "World.h"
+ 
+ enum Says
+ {
+@@ -826,14 +827,27 @@ struct npc_akama_illidan : public ScriptedAI
+             break;
+             case ACTION_AKAMA_MAIEV_DESPAWN:
+             {
++                // CTRL_BREAK sets the world stop flag from an I/O thread. Do not
++                // mutate a creature event queue once teardown has been requested.
++                if (World::IsStopped())
++                    return;
++
+                 Talk(SAY_AKAMA_LIGHT);
+                 me->m_Events.AddEventAtOffset([&] {
+                     me->HandleEmoteCommand(EMOTE_ONESHOT_SALUTE);
+                 }, 3490ms);
++
++                if (World::IsStopped())
++                    return;
++
+                 me->m_Events.AddEventAtOffset([&] {
+                     me->SetRespawnDelay(WEEK);
+                     DoCastSelf(SPELL_AKAMA_DESPAWN);
+                 }, 8340ms); // 4850ms
++
++                if (World::IsStopped())
++                    return;
++
+                 me->m_Events.AddEventAtOffset([&] {
+                     me->DespawnOnEvade();
+                 }, 8740ms);
+diff --git a/var/build/.gitkeep b/var/build/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/ccache/.gitkeep b/var/ccache/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/docker/build/.gitkeep b/var/docker/build/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/docker/ccache/.gitkeep b/var/docker/ccache/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/extractors/Cameras/.gitkeep b/var/extractors/Cameras/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/extractors/dbc/.gitkeep b/var/extractors/dbc/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/extractors/maps/.gitkeep b/var/extractors/maps/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/extractors/mmaps/.gitkeep b/var/extractors/mmaps/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/var/extractors/vmaps/.gitkeep b/var/extractors/vmaps/.gitkeep
+deleted file mode 100644
+index e69de29..0000000
