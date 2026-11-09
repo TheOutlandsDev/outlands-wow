@@ -1,0 +1,36 @@
+########################################################
+# Living Azeroth native faction guild and ranking system
+########################################################
+
+# Master switch. The module ships inert and observe-only.
+LivingAzerothGuild.Enable = 0
+LivingAzerothGuild.ObserveOnly = 1
+
+# Native guild mutations require all relevant switches plus ObserveOnly = 0.
+LivingAzerothGuild.ApplyEnrollment = 0
+LivingAzerothGuild.ApplyRankChanges = 0
+LivingAzerothGuild.MoveOwnedAiFromOtherGuilds = 0
+LivingAzerothGuild.AutoEnrollUnguildedHumans = 0
+LivingAzerothGuild.AllowCreateMissingGuilds = 0
+
+# Cross-faction guild interaction must be disabled in worldserver.conf before
+# this module can become ready.
+LivingAzerothGuild.RequireTwoSideGuildsOff = 1
+
+LivingAzerothGuild.Alliance.Name = "Living Azeroth Alliance"
+# Exact native guild master. Missing, renamed, wrong-faction, or mismatched
+# identities block all native guild mutations.
+LivingAzerothGuild.Alliance.LeaderName = "Symord"
+LivingAzerothGuild.Alliance.LeaderGuid = 604
+LivingAzerothGuild.Alliance.LegacyGuildId = 0
+LivingAzerothGuild.Alliance.LegacyName = "Living Azeroth"
+LivingAzerothGuild.Horde.Name = "Living Azeroth Horde"
+LivingAzerothGuild.Horde.LeaderName = "Knevimu"
+LivingAzerothGuild.Horde.LeaderGuid = 23
+
+# Bounded projection/reconciliation work on the world thread.
+LivingAzerothGuild.AuditIntervalSeconds = 60
+LivingAzerothGuild.MaxBatchSize = 25
+LivingAzerothGuild.PolicyVersion = 1
+LivingAzerothGuild.ExcludedCharacterGuids = "900001"
+LivingAzerothGuild.HistoryPath = "/run/living-azeroth/logs/guild-ranking/history.jsonl"
