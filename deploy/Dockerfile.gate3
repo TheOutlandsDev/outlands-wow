@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1.7
+
+FROM living-azeroth-linux:gate1
+
+ARG SOURCE_REVISION=unknown
+
+LABEL org.opencontainers.image.title="Living Azeroth Linux Gate 3 runtime"
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
+LABEL io.outlandswow.gate="linux-server-only-runtime-gate3"
+
+COPY --chmod=0555 gate3-server-entrypoint.sh /usr/local/bin/gate3-server-entrypoint
+COPY --chmod=0555 gate8-ai-profile.sh /usr/local/bin/gate8-ai-profile
+
+# worldserver resolves module configuration relative to the compiled install
+# prefix even when its primary config is supplied with --config. Preserve an
+# immutable copy before that directory is replaced by a runtime-only tmpfs.
+RUN mkdir -p /opt/living-azeroth-gate3/module-templates \
+    && cp /azerothcore/dist/etc/modules/*.conf.dist \
+        /opt/living-azeroth-gate3/module-templates/
+
+WORKDIR /run/living-azeroth
+ENTRYPOINT ["/usr/local/bin/gate3-server-entrypoint"]

@@ -1,0 +1,77 @@
+# syntax=docker/dockerfile:1.7
+
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION} AS build
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TZ=Etc/UTC
+ARG BUILD_JOBS=16
+ARG SOURCE_REVISION=unknown
+
+LABEL org.opencontainers.image.title="Living Azeroth Linux Gate 1"
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
+LABEL io.outlandswow.gate="linux-native-compile-gate1"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        ccache \
+        clang \
+        cmake \
+        default-libmysqlclient-dev \
+        default-mysql-client \
+        file \
+        git \
+        libboost-all-dev \
+        libbz2-dev \
+        libclang-rt-18-dev \
+        liblzma-dev \
+        libmysql++-dev \
+        libncurses-dev \
+        libreadline-dev \
+        libssl-dev \
+        libtool \
+        make \
+        ninja-build \
+        openssl \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /azerothcore
+
+COPY CMakeLists.txt ./CMakeLists.txt
+COPY conf ./conf
+COPY deps ./deps
+COPY src ./src
+COPY modules ./modules
+
+RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
+    cmake -S /azerothcore -B /azerothcore/build -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX=/azerothcore/dist \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DAPPS_BUILD=all \
+        -DTOOLS_BUILD=db-only \
+        -DSCRIPTS=static \
+        -DMODULES=static \
+        -DBUILD_TESTING=ON \
+        -DUSE_COREPCH=ON \
+        -DUSE_SCRIPTPCH=OFF \
+        -DWITH_WARNINGS=ON \
+        -DWITHOUT_GIT=ON \
+    && cmake --build /azerothcore/build --parallel "${BUILD_JOBS}" \
+    && cmake --install /azerothcore/build \
+    && test -x /azerothcore/dist/bin/authserver \
+    && test -x /azerothcore/dist/bin/worldserver \
+    && test -x /azerothcore/dist/bin/dbimport \
+    && file /azerothcore/dist/bin/authserver \
+    && file /azerothcore/dist/bin/worldserver \
+    && file /azerothcore/dist/bin/dbimport
+
+FROM build AS gate1
+
+RUN ctest --test-dir /azerothcore/build --output-on-failure
