@@ -1,0 +1,29 @@
+name: Offline checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check Python syntax
+        run: python -m compileall -q tools client/wow-launcher
+      - name: Run server-tool unit tests
+        run: PYTHONPATH=tools python -m unittest discover -s tools/tests -p 'test_*.py' -q
+      - name: Run launcher unit tests
+        run: PYTHONPATH=client/wow-launcher python -m unittest discover -s client/wow-launcher/tests -p 'test_*.py' -q
+      - name: Check reconstruction command interface
+        run: python tools/reconstruct_pinned_source.py --help

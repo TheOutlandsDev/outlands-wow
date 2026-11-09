@@ -9,7 +9,18 @@ These are the upstream commits used for the November 2026 offline reconstruction
 | Auction bot | `azerothcore/mod-ah-bot` | `a680cc1c98290713e9b3d3289544af78e5186dc1` |
 | Ollama chat | `DustinHendrickson/mod-ollama-chat` | `8ba5e791f0a84ee04636f0b19b62d3c4aff3dce1` |
 
-From a clean directory, with this kit checked out as `$KIT`, reconstruct source as follows. Run `git apply --check` before each corresponding `git apply`; stop on any mismatch.
+With this kit checked out as `$KIT`, the offline helper can reconstruct the source from four local checkouts already at these exact commits. `NEW_CORE` must be a nonexistent directory under an existing parent. The helper verifies each HEAD, exports only pinned commit content, checks each patch before applying it, and preserves a partial output if a step fails. It skips one unrelated upstream development-tool symlink; unexpected symlinks fail the export.
+
+```sh
+python3 "$KIT/tools/reconstruct_pinned_source.py" \
+  --core-source "$CORE_UPSTREAM" \
+  --playerbots-source "$PLAYERBOTS_UPSTREAM" \
+  --auction-source "$AUCTION_UPSTREAM" \
+  --ollama-source "$OLLAMA_UPSTREAM" \
+  --output-dir "$NEW_CORE"
+```
+
+The equivalent manual sequence is below. Run `git apply --check` before each corresponding `git apply`; stop on any mismatch.
 
 ```sh
 git clone https://github.com/mod-playerbots/azerothcore-wotlk.git core

@@ -16,10 +16,14 @@ The same reviewed source is also available as [a ZIP snapshot](outlands-wow-sour
 - `operations/`: example systemd and monitoring definitions.
 - `client/wow-launcher/`: Tailscale-aware Windows player launcher example.
 - `patches/third-party-local-changes.patch`: local changes to the imported AzerothCore/Playerbots/Ollama source snapshot.
+- `tools/reconstruct_pinned_source.py`: offline reconstruction from four pinned local checkouts into a new directory.
+- `.github/workflows/offline-checks.yml`: Python syntax and unit checks for public kit changes.
 - `third_party_licenses/` and `source/LICENSE`: retained third-party license texts.
 
 ## Rebuild path
 
 See [UPSTREAM-PINS.md](UPSTREAM-PINS.md) for exact source revisions and reconstruction patches, [REBUILD.md](REBUILD.md) for dependencies and staged acceptance, and [THIRD_PARTY.md](THIRD_PARTY.md) before combining or redistributing upstream components.
+
+Use [SYNTHETIC-ACCEPTANCE-TEMPLATE.md](SYNTHETIC-ACCEPTANCE-TEMPLATE.md) for owner-private test records. The offline CI workflow does not run Docker, prove a client login, or validate a live server.
 
 No game client, Blizzard assets, database content, player or account records, AI prompts or chat, secrets, logs, private Tailscale policy, or live backup was copied here. No license is assigned to the kit as a whole.
