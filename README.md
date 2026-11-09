@@ -20,6 +20,6 @@ The same reviewed source is also available as [a ZIP snapshot](outlands-wow-sour
 
 ## Rebuild path
 
-See [REBUILD.md](REBUILD.md) for dependencies, placeholder values, data boundaries, and staged acceptance. See [THIRD_PARTY.md](THIRD_PARTY.md) before combining or redistributing upstream components.
+See [UPSTREAM-PINS.md](UPSTREAM-PINS.md) for exact source revisions and reconstruction patches, [REBUILD.md](REBUILD.md) for dependencies and staged acceptance, and [THIRD_PARTY.md](THIRD_PARTY.md) before combining or redistributing upstream components.
 
 No game client, Blizzard assets, database content, player or account records, AI prompts or chat, secrets, logs, private Tailscale policy, or live backup was copied here. No license is assigned to the kit as a whole.
