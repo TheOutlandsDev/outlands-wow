@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "servers": [
+    {
+      "id": "living-azeroth-gate5",
+      "name": "Living Azeroth Gate 5",
+      "game": "World of Warcraft 3.3.5a",
+      "build": 12340,
+      "address": "100.64.0.10",
+      "auth_port": 3724,
+      "world_port": 8085,
+      "access": "tailscale-only",
+      "requires_tailscale": true
+    }
+  ]
+}
